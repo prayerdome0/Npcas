@@ -1,0 +1,10 @@
+.env
+config.toml
+*.log
+*.sqlite
+*.db
+reports/
+data/
+
+__pycache__/
+*.py[cod]

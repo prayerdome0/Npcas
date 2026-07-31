@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiprofitbot"
+version = "0.1.0"
+description = "A safe, backtest-first AI-assisted trading bot framework. No profit guarantees."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Arena AI Agent" }]
+license = { text = "MIT" }
+keywords = ["trading", "bot", "machine-learning", "backtesting", "paper-trading"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[project.scripts]
+aiprofitbot = "aiprofitbot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
