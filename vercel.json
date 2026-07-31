@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "routes": [
+    { "src": "/", "dest": "/api/index.py" },
+    { "src": "/health", "dest": "/api/index.py" },
+    { "src": "/backtest", "dest": "/api/index.py" },
+    { "src": "/api/backtest", "dest": "/api/index.py" }
+  ]
+}
