@@ -22,5 +22,8 @@ aiprofitbot = "aiprofitbot.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Vercel resolves the entrypoint as a Python "module:object" value, not a file
+# path. "api.index:handler" loads the `handler` class (a BaseHTTPRequestHandler
+# subclass) from ./api/index.py.
 [tool.vercel]
-entrypoint = "api/index.py"
+entrypoint = "api.index:handler"
