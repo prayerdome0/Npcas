@@ -21,3 +21,6 @@ aiprofitbot = "aiprofitbot.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.vercel]
+entrypoint = "api/index.py"
