@@ -12,9 +12,7 @@ const nextConfig = {
       },
     ],
   },
-  experimental: {
-    serverComponentsExternalPackages: ['cloudinary', 'livekit-client'],
-  },
+  serverExternalPackages: ['cloudinary', 'livekit-client'],
 };
 
 module.exports = nextConfig;
