@@ -1,9 +1,7 @@
 {
-  "version": 2,
-  "routes": [
-    { "src": "/", "dest": "/api/index.py" },
-    { "src": "/health", "dest": "/api/index.py" },
-    { "src": "/backtest", "dest": "/api/index.py" },
-    { "src": "/api/backtest", "dest": "/api/index.py" }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "echo 'Static site - no build required'",
+  "outputDirectory": ".",
+  "installCommand": "echo 'No dependencies to install'"
 }
