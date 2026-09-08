@@ -1,1366 +1,1602 @@
-/* ZACH: SHADOW PROTOCOL — cinematic top-down action engine */
-(() => {
-'use strict';
-const $ = id => document.getElementById(id);
-const canvas = $('game'), ctx = canvas.getContext('2d');
-const mmCanvas = $('minimap'), mm = mmCanvas.getContext('2d');
-let W = 0, H = 0, DPR = 1;
-function resize() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W * DPR; canvas.height = H * DPR;
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-}
-window.addEventListener('resize', resize); resize();
+import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import {
+  LANDMARKS, JOBS, PROPERTIES, BUSINESSES, VEHICLES, SHOP_ITEMS, STORY,
+  FIRST_NAMES, LAST_NAMES, PERSONALITIES, DIALOGUE, DISTRICTS,
+} from './data.js';
+import {
+  createWorld, createHuman, animateHuman, createCarMesh, createInterior,
+  collides, inWater, makeLabelSprite, WORLD_SIZE,
+} from './world.js';
+import { audio } from './audio.js';
+import { emit } from './bus.js';
 
-// ---------- utils ----------
-const TAU = Math.PI * 2;
-const rand = (a, b) => a + Math.random() * (b - a);
-const randi = (a, b) => Math.floor(rand(a, b + 1));
-const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const angTo = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
-const lerp = (a, b, t) => a + (b - a) * t;
+const SAVE_KEY = 'zach-life-v1';
+const MINUTE_MS = 900; // 1 game minute in real ms — full day ~ 21.6 real minutes, hours feel playable
 
-// ---------- photo / star name ----------
-function getPhoto() { try { return localStorage.getItem('zach_photo') || 'assets/hero.png'; } catch (e) { return 'assets/hero.png'; } }
-function applyPhoto() {
-  const p = getPhoto();
-  $('hud-face').src = p; $('menu-face').src = p;
-  const nm = heroName();
-  $('star-name').textContent = nm;
-  document.querySelectorAll('.star-name-v').forEach(e => e.textContent = nm);
-}
-$('star-name').parentElement.style.cursor = 'pointer';
-$('star-name').parentElement.title = 'Click to change star name';
-$('star-name').parentElement.addEventListener('click', (e) => {
-  if (e.target.closest('button')) return;
-  const v = prompt('Star name (the hero):', heroName());
-  if (v && v.trim()) { try { localStorage.setItem('zach_star_name', v.trim().toUpperCase().slice(0, 14)); } catch (err) {} applyPhoto(); }
-});
-
-// villain portrait: procedural menacing face
-function villainPortrait(name) {
-  const c = document.createElement('canvas'); c.width = 180; c.height = 240;
-  const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 0, 240);
-  grad.addColorStop(0, '#1a0d0d'); grad.addColorStop(1, '#000');
-  g.fillStyle = grad; g.fillRect(0, 0, 180, 240);
-  // silhouette head
-  g.fillStyle = '#2a2a32';
-  g.beginPath(); g.ellipse(90, 110, 52, 62, 0, 0, TAU); g.fill();
-  g.fillStyle = '#17171c';
-  g.beginPath(); g.ellipse(90, 210, 75, 70, 0, 0, TAU); g.fill();
-  // glowing eyes
-  g.fillStyle = '#ff2222'; g.shadowColor = '#ff0000'; g.shadowBlur = 18;
-  g.fillRect(55, 100, 26, 9); g.fillRect(99, 100, 26, 9);
-  g.shadowBlur = 0;
-  // scar / grin
-  g.strokeStyle = '#ff2222'; g.lineWidth = 2;
-  g.beginPath(); g.moveTo(105, 82); g.lineTo(95, 128); g.stroke();
-  g.strokeStyle = '#881111'; g.beginPath(); g.moveTo(65, 148); g.quadraticCurveTo(90, 158, 115, 146); g.stroke();
-  g.fillStyle = 'rgba(255,42,42,.9)'; g.font = 'bold 20px Anton, sans-serif'; g.textAlign = 'center';
-  g.fillText((name || '???').slice(0, 10), 90, 226);
-  return c.toDataURL();
-}
-const villainCache = {};
-function portraitFor(line) {
-  if (line.hero) return getPhoto();
-  if (line.villain) {
-    if (!villainCache[line.name]) villainCache[line.name] = villainPortrait(line.name);
-    return villainCache[line.name];
-  }
-  if (line.name === 'NARRATOR') {
-    if (!villainCache.N) { const c = document.createElement('canvas'); c.width = 180; c.height = 240; const g = c.getContext('2d');
-      const gr = g.createLinearGradient(0,0,0,240); gr.addColorStop(0,'#0d1626'); gr.addColorStop(1,'#000'); g.fillStyle = gr; g.fillRect(0,0,180,240);
-      g.fillStyle = '#f5c518'; g.font = '90px serif'; g.textAlign='center'; g.fillText('🎬', 90, 140);
-      g.fillStyle='#fff'; g.font='bold 16px Inter'; g.fillText('NARRATOR', 90, 200);
-      villainCache.N = c.toDataURL(); }
-    return villainCache.N;
-  }
-  // commander etc — badge portrait
-  if (!villainCache[line.name]) { const c = document.createElement('canvas'); c.width=180; c.height=240; const g=c.getContext('2d');
-    const gr=g.createLinearGradient(0,0,0,240); gr.addColorStop(0,'#12241a'); gr.addColorStop(1,'#000'); g.fillStyle=gr; g.fillRect(0,0,180,240);
-    g.fillStyle='#37d67a'; g.font='80px serif'; g.textAlign='center'; g.fillText('🎖',90,140);
-    g.fillStyle='#fff'; g.font='bold 13px Inter'; g.fillText(line.name.slice(0,14),90,200);
-    villainCache[line.name]=c.toDataURL(); }
-  return villainCache[line.name];
-}
-
-// ---------- audio unlock ----------
-function unlockAudio() { ZAudio.init(); }
-window.addEventListener('pointerdown', unlockAudio, { passive: true });
-window.addEventListener('keydown', unlockAudio);
-
-// ---------- input ----------
-const keys = {};
-let mouse = { x: W / 2, y: H / 2, down: false, rdown: false };
-window.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
-  if (e.code === 'KeyM') toggleMute();
-  if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
-  if (state === 'cutscene' && (e.code === 'Space' || e.code === 'Enter')) advanceCutscene();
-});
-window.addEventListener('keyup', e => keys[e.code] = false);
-canvas.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-canvas.addEventListener('mousedown', e => { if (e.button === 0) mouse.down = true; if (e.button === 2) mouse.rdown = true; });
-window.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; if (e.button === 2) mouse.rdown = false; });
-window.addEventListener('contextmenu', e => e.preventDefault());
-
-// touch
-const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-const sticks = { left: { x: 0, y: 0, id: null }, right: { x: 0, y: 0, id: null } };
-function setupStick(el, s, isRight) {
-  const nub = el.querySelector('.nub');
-  const setNub = (dx, dy) => nub.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-  el.addEventListener('touchstart', e => { e.preventDefault(); const t = e.changedTouches[0]; s.id = t.identifier; s.cx = el.getBoundingClientRect().left + 60; s.cy = el.getBoundingClientRect().top + 60; }, { passive: false });
-  el.addEventListener('touchmove', e => {
-    e.preventDefault();
-    for (const t of e.changedTouches) if (t.identifier === s.id) {
-      let dx = t.clientX - s.cx, dy = t.clientY - s.cy;
-      const m = Math.hypot(dx, dy), max = 48;
-      if (m > max) { dx = dx / m * max; dy = dy / m * max; }
-      setNub(dx, dy); s.x = dx / max; s.y = dy / max;
-      if (isRight && m > 14) mouse.down = true;
-    }
-  }, { passive: false });
-  const end = e => { for (const t of e.changedTouches) if (t.identifier === s.id) { s.id = null; s.x = 0; s.y = 0; setNub(0, 0); if (isRight) mouse.down = false; } };
-  el.addEventListener('touchend', end); el.addEventListener('touchcancel', end);
-}
-if (isTouch) {
-  setupStick($('stick-left'), sticks.left, false);
-  setupStick($('stick-right'), sticks.right, true);
-  $('btn-dash').addEventListener('touchstart', e => { e.preventDefault(); tryDash(); }, { passive: false });
-  $('btn-grenade').addEventListener('touchstart', e => { e.preventDefault(); throwGrenade(); }, { passive: false });
-  $('btn-slowmo').addEventListener('touchstart', e => { e.preventDefault(); toggleSlowmo(); }, { passive: false });
-}
-
-// ---------- game state ----------
-let state = 'menu'; // menu, cutscene, play, pause, gameover, victory
-let actIndex = 0, waveIndex = -1, waveState = 'idle', waveTimer = 0, spawnQueue = [];
-let boss = null, bossActive = false;
-let score = 0, kills = 0, combo = 1, comboTimer = 0, style = 0; // style points -> rank
-let runTime = 0, shake = 0, hitStop = 0, timeScale = 1, slowmoActive = false, slowmoMeter = 100, slowmoDrain = 0;
-let flashA = 0, centerMsgTimer = 0;
-let obstacles = [], pickups = [], grenades = [];
-let bullets = [], ebullets = [], enemies = [], parts = [], casings = [], dmgNums = [], floaters = [];
-let rain = [];
-let camera = { x: 0, y: 0 };
-const WORLD = { w: 2400, h: 2400 };
-
-const player = {
-  x: 0, y: 0, r: 16, hp: 100, maxHp: 100, armor: 0, maxArmor: 75,
-  speed: 300, aim: 0, fireCd: 0, reloadT: 0, dashCd: 0, dashT: 0, dashDx: 0, dashDy: 0, iframes: 0,
-  weapons: { PISTOL: { mag: 12, reserve: Infinity, unlocked: true }, SMG: { mag: 0, reserve: 0, unlocked: false }, RIFLE: { mag: 0, reserve: 0, unlocked: false }, SHOTGUN: { mag: 0, reserve: 0, unlocked: false } },
-  cur: 'PISTOL', grenades: 3, dead: false,
+export const state = {
+  ready: false,
+  mode: 'menu',
+  time: 8 * 60,
+  day: 1,
+  weather: 'sunny',
+  weatherTimer: 0,
+  money: 750,
+  bank: 0,
+  bizBank: 0,
+  credit: 640,
+  loan: 0,
+  needs: { hunger: 82, energy: 90, fun: 68, social: 52, hygiene: 85 },
+  job: null,
+  properties: ['studio'],
+  home: 'studio',
+  businesses: [],
+  inventory: [{ id: 'coffee', n: 1 }],
+  ownedVehicles: [],
+  story: 0,
+  storyDone: [],
+  deliveries: 0,
+  talks: 0,
+  relationships: {},
+  flags: {},
+  xp: 0,
+  level: 1,
+  keys: {},
+  phoneOpen: false,
+  uiBlock: false,
+  interior: null,
+  delivery: null,
+  dialogue: null,
+  looking: null,
+  seed: 1,
 };
 
-function best() { try { return parseInt(localStorage.getItem('zach_best') || '0', 10); } catch (e) { return 0; } }
-function setBest(v) { try { localStorage.setItem('zach_best', String(v)); } catch (e) {} }
-function savedAct() { try { return parseInt(localStorage.getItem('zach_act') || '0', 10); } catch (e) { return 0; } }
+let renderer, scene, camera, composer, bloom, sky, sun, sunLight, hemi, fill;
+let world, player, playerMesh, interiorGroup;
+let npcs = [];
+let vehicles = [];
+let traffic = [];
+let rain, rainGeo, rainPositions;
+let marker;
+let clock = new THREE.Clock();
+let camYaw = 0.2, camPitch = 0.42, camDist = 7.2;
+let pointerLocked = false;
+let introT = 0;
+let saveAcc = 0;
+let flash = 0;
+let talkTarget = null;
+let night01 = 0;
+let canvasEl;
+let lastPrompt = '';
 
-// ---------- screens ----------
-function show(id) { $(id).classList.remove('hidden'); }
-function hide(id) { $(id).classList.add('hidden'); }
-function setCinema(on) { document.body.classList.toggle('cinema', on); }
+const _f = new THREE.Vector3();
+const _r = new THREE.Vector3();
+const _p = new THREE.Vector3();
+const sunPos = new THREE.Vector3();
 
-// ---------- cutscene engine ----------
-let csLines = [], csIdx = 0, csChar = 0, csTimer = null, csDone = null, csTyping = false;
-function playCutscene(lines, done) {
-  state = 'cutscene'; csLines = lines; csIdx = 0; csDone = done;
-  setCinema(true); hide('hud'); hide('menu'); show('cutscene');
-  ZAudio.stopMusic();
-  showLine();
+export function initGame(canvas) {
+  canvasEl = canvas;
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87a8c8);
+  scene.fog = new THREE.FogExp2(0x87a8c8, 0.0016);
+
+  camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.15, 40000);
+
+  sky = new Sky();
+  sky.scale.setScalar(45000);
+  scene.add(sky);
+  sun = new THREE.Vector3();
+  const su = sky.material.uniforms;
+  su['turbidity'].value = 6;
+  su['rayleigh'].value = 1.8;
+  su['mieCoefficient'].value = 0.005;
+  su['mieDirectionalG'].value = 0.75;
+
+  hemi = new THREE.HemisphereLight(0xb8d4f0, 0x3d4a28, 0.7);
+  scene.add(hemi);
+  sunLight = new THREE.DirectionalLight(0xfff1d0, 2.2);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.camera.near = 1;
+  sunLight.shadow.camera.far = 180;
+  sunLight.shadow.camera.left = sunLight.shadow.camera.bottom = -50;
+  sunLight.shadow.camera.right = sunLight.shadow.camera.top = 50;
+  sunLight.shadow.bias = -0.0008;
+  scene.add(sunLight);
+  scene.add(sunLight.target);
+  fill = new THREE.AmbientLight(0xffffff, 0.12);
+  scene.add(fill);
+
+  world = createWorld(scene);
+  buildRain();
+  marker = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.55),
+    new THREE.MeshBasicMaterial({ color: 0xf0c75e })
+  );
+  marker.position.y = 3.2;
+  scene.add(marker);
+
+  spawnCitizens();
+  spawnTraffic();
+  spawnDealershipCars();
+
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.15, 0.4, 0.85);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+
+  bindInput();
+  window.addEventListener('resize', onResize);
+  state.ready = true;
+  clock.start();
+  loop();
 }
-function showLine() {
-  const line = csLines[csIdx];
-  if (!line) { endCutscene(); return; }
-  if (line.titleCard) {
-    $('cs-title-card').classList.remove('hidden');
-    $('cs-act').textContent = line.act; $('cs-act-name').textContent = line.name;
-    $('cs-box').style.visibility = 'hidden'; $('cs-portrait-wrap').style.visibility = 'hidden';
-    ZAudio.boss();
-    csTyping = false;
-    clearTimeout(csTimer);
-    csTimer = setTimeout(() => { // auto-advance title cards
-      if (state === 'cutscene' && csLines[csIdx] && csLines[csIdx].titleCard) advanceCutscene();
-    }, 2200);
-    return;
+
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+}
+
+function buildRain() {
+  rainGeo = new THREE.BufferGeometry();
+  const n = 1400;
+  rainPositions = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    rainPositions[i * 3] = (Math.random() - 0.5) * 60;
+    rainPositions[i * 3 + 1] = Math.random() * 28;
+    rainPositions[i * 3 + 2] = (Math.random() - 0.5) * 60;
   }
-  $('cs-title-card').classList.add('hidden');
-  $('cs-box').style.visibility = 'visible'; $('cs-portrait-wrap').style.visibility = 'visible';
-  $('cs-name').textContent = line.name;
-  $('cs-name').style.color = line.villain ? '#ff6b6b' : line.hero ? '#f5c518' : '#7cc4ff';
-  $('cs-portrait-wrap').classList.toggle('villain', !!line.villain);
-  $('cs-portrait').src = portraitFor(line);
-  // typewriter
-  const full = line.text; csChar = 0; csTyping = true;
-  $('cs-text').textContent = '';
-  clearInterval(csTimer);
-  csTimer = setInterval(() => {
-    csChar += 2;
-    $('cs-text').textContent = full.slice(0, csChar);
-    if (csChar >= full.length) { clearInterval(csTimer); csTyping = false; }
-  }, 18);
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+  rain = new THREE.Points(
+    rainGeo,
+    new THREE.PointsMaterial({ color: 0xb8d4e8, size: 0.08, transparent: true, opacity: 0.65 })
+  );
+  rain.visible = false;
+  scene.add(rain);
 }
-function advanceCutscene() {
-  if (state !== 'cutscene') return;
-  const line = csLines[csIdx];
-  if (line && !line.titleCard && csTyping) { // complete line
-    clearInterval(csTimer); $('cs-text').textContent = line.text; csTyping = false; return;
+
+function rand(a) { return a[Math.floor(Math.random() * a.length)]; }
+
+function spawnCitizens() {
+  const homes = LANDMARKS.filter((l) => l.type === 'home' || l.district === 'oakwood' || l.district === 'eastbrook');
+  for (let i = 0; i < 34; i++) {
+    const homeLm = homes[i % homes.length];
+    const job = JOBS[i % JOBS.length];
+    const workLm = LANDMARKS.find((l) => l.id === job.location) || LANDMARKS[0];
+    const appearance = {
+      skin: rand(['#f6d5b8', '#e8b98a', '#c68642', '#8d5524', '#5c3310', '#2e1a0f']),
+      hair: rand(['#1a1a1a', '#3b2a1a', '#6b3a1a', '#c4a35a', '#d8d0c8', '#8b1e3f']),
+      hairStyle: i % 5,
+      shirt: rand(['#f0f0f0', '#1e3a5f', '#c45c26', '#2d6a4f', '#7b2d8e', '#111111', '#c9a227']),
+      pants: rand(['#1f2933', '#3d4a5c', '#4a3728', '#1a3c34']),
+      eyes: rand(['#3d2914', '#1f4e79', '#2f6f4e', '#5b3a29']),
+      height: 0.92 + Math.random() * 0.16,
+      body: 0.9 + Math.random() * 0.25,
+    };
+    const mesh = createHuman(appearance);
+    const x = homeLm.x + (Math.random() - 0.5) * 10;
+    const z = homeLm.z + 8 + Math.random() * 6;
+    mesh.position.set(x, 0, z);
+    scene.add(mesh);
+    const npc = {
+      id: 'n' + i,
+      name: rand(FIRST_NAMES) + ' ' + rand(LAST_NAMES),
+      job: job.name,
+      jobId: job.id,
+      personality: PERSONALITIES[i % PERSONALITIES.length],
+      home: new THREE.Vector3(homeLm.x + 6, 0, homeLm.z + 8),
+      work: new THREE.Vector3(workLm.x + 8, 0, workLm.z + 10),
+      shop: new THREE.Vector3(-52, 0, 40),
+      plaza: new THREE.Vector3((Math.random() - 0.5) * 20, 0, 12 + Math.random() * 8),
+      mesh,
+      target: new THREE.Vector3(x, 0, z),
+      speed: 1.6 + Math.random() * 0.8,
+      talking: false,
+      label: null,
+    };
+    npcs.push(npc);
   }
-  clearInterval(csTimer); clearTimeout(csTimer);
-  csIdx++;
-  if (csIdx >= csLines.length) endCutscene(); else showLine();
-}
-function endCutscene() {
-  clearInterval(csTimer); clearTimeout(csTimer);
-  hide('cutscene'); setCinema(false);
-  const d = csDone; csDone = null;
-  if (d) d();
-}
-$('cutscene').addEventListener('click', e => { if (e.target.id !== 'cs-skip') advanceCutscene(); });
-$('cs-skip').addEventListener('click', e => { e.stopPropagation(); endCutscene(); });
-
-// ---------- HUD ----------
-function centerMessage(txt, dur = 1.6) {
-  const el = $('center-message');
-  el.textContent = txt; el.classList.remove('hidden');
-  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
-  centerMsgTimer = dur;
-}
-function feed(txt) {
-  const d = document.createElement('div'); d.className = 'feed'; d.textContent = txt;
-  const kf = $('killfeed'); kf.prepend(d);
-  while (kf.children.length > 5) kf.lastChild.remove();
-  setTimeout(() => d.remove(), 3200);
-}
-function subtitle(txt, dur = 3) {
-  $('subtitle').textContent = txt;
-  clearTimeout(subtitle._t);
-  subtitle._t = setTimeout(() => $('subtitle').textContent = '', dur * 1000);
-}
-function styleRank() {
-  const r = style >= 900 ? 'S' : style >= 500 ? 'A' : style >= 220 ? 'B' : 'C';
-  const el = $('style-rank');
-  el.textContent = r;
-  el.style.color = r === 'S' ? '#f5c518' : r === 'A' ? '#ff6b6b' : r === 'B' ? '#7cc4ff' : '#fff';
-  return r;
-}
-function updateHUD() {
-  const hpPct = clamp(player.hp / player.maxHp * 100, 0, 100);
-  $('hp-fill').style.width = hpPct + '%';
-  $('hp-text').textContent = Math.ceil(player.hp);
-  document.querySelector('.hp-bar').classList.toggle('low', hpPct < 30);
-  $('armor-fill').style.width = clamp(player.armor / player.maxArmor * 100, 0, 100) + '%';
-  $('slowmo-fill').style.width = clamp(slowmoMeter, 0, 100) + '%';
-  $('score').textContent = score.toLocaleString();
-  const cb = $('combo');
-  if (combo > 1) { cb.classList.remove('hidden'); cb.textContent = `x${combo} COMBO`; } else cb.classList.add('hidden');
-  styleRank();
-  $('weapon-name').textContent = player.cur;
-  const w = player.weapons[player.cur];
-  $('ammo').textContent = `${w.mag} / ${w.reserve === Infinity ? '∞' : w.reserve}`;
-  $('grenades').textContent = player.grenades;
-  const act = STORY.acts[actIndex];
-  $('act-label').textContent = act.act;
-  $('objective-text').textContent = bossActive ? `DEFEAT ${boss ? boss.name : ''}` : waveState === 'fight' ? `WAVE ${waveIndex + 1}/${act.waves.length} — ${enemies.length + spawnQueue.length} LEFT` : 'GET READY';
-  if (bossActive && boss) { $('boss-bar-wrap').classList.remove('hidden'); $('boss-name').textContent = `☠ ${boss.name}`; $('boss-fill').style.width = clamp(boss.hp / boss.maxHp * 100, 0, 100) + '%'; }
-  else $('boss-bar-wrap').classList.add('hidden');
-  $('damage-vignette').style.opacity = hpPct < 35 ? (0.5 + Math.sin(runTime * 6) * 0.2) : 0;
-  $('slowmo-vignette').style.opacity = slowmoActive ? 1 : 0;
 }
 
-// ---------- map / obstacles ----------
-function buildMap(actId) {
-  obstacles = [];
-  const theme = STORY.acts[actId].theme;
-  // border walls
-  const m = 60, t = 40;
-  obstacles.push({ x: 0, y: 0, w: WORLD.w, h: t, wall: true });
-  obstacles.push({ x: 0, y: WORLD.h - t, w: WORLD.w, h: t, wall: true });
-  obstacles.push({ x: 0, y: 0, w: t, h: WORLD.h, wall: true });
-  obstacles.push({ x: WORLD.w - t, y: 0, w: t, h: WORLD.h, wall: true });
-  // city blocks / crates
-  const cx = WORLD.w / 2, cy = WORLD.h / 2;
-  const blocks = actId === 1 ? 10 : 14;
-  for (let i = 0; i < blocks; i++) {
-    for (let tries = 0; tries < 12; tries++) {
-      const w = rand(90, 260), h = rand(90, 220);
-      const x = rand(160, WORLD.w - 160 - w), y = rand(160, WORLD.h - 160 - h);
-      // keep center spawn clear
-      if (Math.abs(x + w / 2 - cx) < 260 && Math.abs(y + h / 2 - cy) < 260) continue;
-      if (obstacles.some(o => x < o.x + o.w + 90 && x + w + 90 > o.x && y < o.y + o.h + 90 && y + h + 90 > o.y && !o.wall)) continue;
-      obstacles.push({ x, y, w, h, hue: theme.accent, crates: Math.random() < 0.45 });
-      break;
+function spawnTraffic() {
+  const loop = [];
+  for (let z = -220; z <= 250; z += 20) loop.push(new THREE.Vector3(4.5, 0, z));
+  for (let x = 4.5; x <= 200; x += 20) loop.push(new THREE.Vector3(x, 0, 250));
+  for (let z = 250; z >= -40; z -= 20) loop.push(new THREE.Vector3(200, 0, z));
+  for (let x = 200; x >= -4.5; x -= 20) loop.push(new THREE.Vector3(x, 0, 36));
+  const defs = [VEHICLES[1], VEHICLES[2], VEHICLES[3], VEHICLES[6], VEHICLES[4]];
+  for (let i = 0; i < 10; i++) {
+    const def = defs[i % defs.length];
+    const mesh = createCarMesh(def, def.color);
+    const idx = (i * 7) % loop.length;
+    mesh.position.copy(loop[idx]);
+    mesh.position.y = 0;
+    scene.add(mesh);
+    traffic.push({ mesh, def, path: loop, idx, speed: 9 + Math.random() * 5, ai: true });
+  }
+}
+
+function spawnDealershipCars() {
+  const spots = world.parking;
+  VEHICLES.forEach((def, i) => {
+    if (def.water || def.fly) return;
+    const spot = spots[i % spots.length];
+    const mesh = createCarMesh(def);
+    mesh.position.set(spot.x + i * 0.2, 0, spot.z);
+    mesh.rotation.y = spot.yaw;
+    scene.add(mesh);
+    vehicles.push({
+      id: def.id + '_' + i,
+      def,
+      mesh,
+      owned: false,
+      fuel: def.fuel,
+      wear: 0,
+      hp: 100,
+      speed: 0,
+      parked: true,
+    });
+  });
+  // boat at harbor
+  const boatDef = VEHICLES.find((v) => v.type === 'boat');
+  const boat = createCarMesh(boatDef);
+  boat.position.set(-240, 0.2, 200);
+  scene.add(boat);
+  vehicles.push({ id: 'boat_0', def: boatDef, mesh: boat, owned: false, fuel: boatDef.fuel, wear: 0, hp: 100, speed: 0, parked: true });
+  const heliDef = VEHICLES.find((v) => v.type === 'heli');
+  const heli = createCarMesh(heliDef);
+  heli.position.set(58, 0, 200);
+  scene.add(heli);
+  vehicles.push({ id: 'heli_0', def: heliDef, mesh: heli, owned: false, fuel: heliDef.fuel, wear: 0, hp: 100, speed: 0, parked: true });
+}
+
+function bindInput() {
+  const k = state.keys;
+  addEventListener('keydown', (e) => {
+    k[e.code] = true;
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+    if (e.code === 'KeyM' && !state.uiBlock) audio.toggle();
+    if (e.code === 'KeyH' && player?.vehicle) audio.horn();
+    if (e.code === 'KeyF') tryVehicle();
+    if (e.code === 'KeyE') interact();
+    if (e.code === 'Tab') { e.preventDefault(); emit('toggle-phone'); }
+    if (e.code === 'Escape') emit('escape');
+  });
+  addEventListener('keyup', (e) => { k[e.code] = false; });
+  addEventListener('mousemove', (e) => {
+    if (state.mode !== 'play' && state.mode !== 'interior' && state.mode !== 'intro') return;
+    if (state.uiBlock || state.phoneOpen) return;
+    if (!pointerLocked && !(e.buttons & 2) && !(e.buttons & 1)) return;
+    camYaw -= e.movementX * 0.0035;
+    camPitch = Math.max(0.08, Math.min(1.15, camPitch + e.movementY * 0.0025));
+  });
+  canvasEl.addEventListener('click', () => {
+    if (state.mode === 'play' || state.mode === 'interior') {
+      canvasEl.requestPointerLock?.();
     }
-  }
-  // scattered crates
-  for (let i = 0; i < 16; i++) {
-    const s = rand(34, 52);
-    obstacles.push({ x: rand(120, WORLD.w - 120), y: rand(120, WORLD.h - 120), w: s, h: s, crate: true });
-  }
-  // rain
-  rain = [];
-  if (theme.rain) for (let i = 0; i < 130; i++) rain.push({ x: rand(0, W), y: rand(0, H), s: rand(700, 1200) });
-}
-function collideCircle(x, y, r) {
-  // returns corrected position after pushing out of obstacles + walls
-  for (const o of obstacles) {
-    const nx = clamp(x, o.x, o.x + o.w), ny = clamp(y, o.y, o.y + o.h);
-    const dx = x - nx, dy = y - ny, d = Math.hypot(dx, dy);
-    if (d < r) {
-      if (d < 0.001) { x += r; continue; }
-      const push = r - d;
-      x += dx / d * push; y += dy / d * push;
+  });
+  canvasEl.addEventListener('contextmenu', (e) => e.preventDefault());
+  document.addEventListener('pointerlockchange', () => {
+    pointerLocked = document.pointerLockElement === canvasEl;
+  });
+
+  // touch
+  let lx = 0, ly = 0, rx = 0, ry = 0, leftId = null, rightId = null;
+  addEventListener('touchstart', (e) => {
+    for (const t of e.changedTouches) {
+      if (t.clientX < innerWidth / 2 && leftId == null) { leftId = t.identifier; lx = t.clientX; ly = t.clientY; }
+      else if (rightId == null) { rightId = t.identifier; rx = t.clientX; ry = t.clientY; }
     }
-  }
-  x = clamp(x, 50, WORLD.w - 50); y = clamp(y, 50, WORLD.h - 50);
-  return { x, y };
+  }, { passive: true });
+  addEventListener('touchmove', (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === leftId) {
+        const dx = (t.clientX - lx) / 50, dy = (t.clientY - ly) / 50;
+        k._tx = Math.max(-1, Math.min(1, dx));
+        k._ty = Math.max(-1, Math.min(1, dy));
+      }
+      if (t.identifier === rightId) {
+        camYaw -= (t.clientX - rx) * 0.01;
+        camPitch = Math.max(0.08, Math.min(1.15, camPitch + (t.clientY - ry) * 0.008));
+        rx = t.clientX; ry = t.clientY;
+      }
+    }
+  }, { passive: true });
+  addEventListener('touchend', (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === leftId) { leftId = null; k._tx = 0; k._ty = 0; }
+      if (t.identifier === rightId) rightId = null;
+    }
+  });
 }
-function bulletHitsWall(x, y) {
-  for (const o of obstacles) if (x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h) return true;
-  return x < 0 || y < 0 || x > WORLD.w || y > WORLD.h;
+
+export function hasSave() {
+  try { return !!localStorage.getItem(SAVE_KEY); } catch { return false; }
 }
-function lineOfSight(a, b) {
-  const steps = Math.ceil(dist(a, b) / 26);
-  for (let i = 1; i < steps; i++) {
-    const x = lerp(a.x, b.x, i / steps), y = lerp(a.y, b.y, i / steps);
-    if (bulletHitsWall(x, y)) return false;
-  }
+
+export function getSaveSummary() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SAVE_KEY));
+    if (!s) return null;
+    return { name: s.name, day: s.day, money: s.money, level: s.level };
+  } catch { return null; }
+}
+
+export function startNewLife(custom) {
+  Object.assign(state, {
+    mode: 'intro',
+    time: 8 * 60,
+    day: 1,
+    weather: 'sunny',
+    weatherTimer: 0,
+    money: 750,
+    bank: 0,
+    bizBank: 0,
+    credit: 640,
+    loan: 0,
+    needs: { hunger: 82, energy: 90, fun: 68, social: 52, hygiene: 85 },
+    job: null,
+    properties: ['studio'],
+    home: 'studio',
+    businesses: [],
+    inventory: [{ id: 'coffee', n: 1 }],
+    ownedVehicles: [],
+    story: 0,
+    storyDone: [],
+    deliveries: 0,
+    talks: 0,
+    relationships: {},
+    flags: {},
+    xp: 0,
+    level: 1,
+    interior: null,
+    delivery: null,
+    dialogue: null,
+    appearance: custom,
+    name: custom.name || 'Zach',
+    trait: custom.trait || 'hustler',
+  });
+  if (playerMesh) scene.remove(playerMesh);
+  playerMesh = createHuman(custom);
+  player = { x: -186, z: 48, y: 0, yaw: 0, vy: 0, vehicle: null };
+  playerMesh.position.set(player.x, 0, player.z);
+  scene.add(playerMesh);
+  introT = 0;
+  camYaw = 0.4; camPitch = 0.5; camDist = 8;
+  audio.start();
+  emit('hud', { on: true });
+  emit('notify', { text: 'Welcome to New Aurora. This life is yours.', kind: 'story' });
+  emit('mission', { mission: STORY[0] });
+  saveGame();
+}
+
+export function continueLife() {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (!raw) return false;
+  const s = JSON.parse(raw);
+  const appearance = s.appearance || {
+    name: s.name || 'Zach', skin: '#c68642', hair: '#1a1a1a', hairStyle: 0,
+    shirt: '#1e3a5f', pants: '#1f2933', eyes: '#3d2914', height: 1, body: 1, trait: 'hustler',
+  };
+  startNewLife(appearance);
+  Object.assign(state, {
+    mode: 'play',
+    time: s.time ?? state.time,
+    day: s.day ?? 1,
+    weather: s.weather ?? 'sunny',
+    money: s.money ?? 750,
+    bank: s.bank ?? 0,
+    bizBank: s.bizBank ?? 0,
+    credit: s.credit ?? 640,
+    loan: s.loan ?? 0,
+    needs: s.needs ?? state.needs,
+    job: s.job ?? null,
+    properties: s.properties ?? ['studio'],
+    home: s.home ?? 'studio',
+    businesses: s.businesses ?? [],
+    inventory: s.inventory ?? [],
+    ownedVehicles: s.ownedVehicles ?? [],
+    story: s.story ?? 0,
+    storyDone: s.storyDone ?? [],
+    deliveries: s.deliveries ?? 0,
+    talks: s.talks ?? 0,
+    relationships: s.relationships ?? {},
+    flags: s.flags ?? {},
+    xp: s.xp ?? 0,
+    level: s.level ?? 1,
+    name: s.name || appearance.name,
+    trait: s.trait || appearance.trait,
+  });
+  player.x = s.x ?? player.x;
+  player.z = s.z ?? player.z;
+  playerMesh.position.set(player.x, 0, player.z);
+  state.ownedVehicles.forEach((id) => {
+    const v = vehicles.find((c) => c.def.id === id || c.id.startsWith(id));
+    if (v) v.owned = true;
+  });
+  emit('notify', { text: `Day ${state.day}. ${state.name} is back.`, kind: 'info' });
+  emit('mission', { mission: STORY[state.story] || null });
   return true;
 }
 
-// ---------- spawning ----------
-function spawnEnemy(type, x, y) {
-  const base = ENEMIES[type];
-  const scale = 1 + actIndex * 0.18;
-  const e = {
-    type, name: base.name, x, y, r: base.r,
-    hp: base.hp * (base.boss ? 1 : scale), maxHp: base.hp * (base.boss ? 1 : scale),
-    speed: base.speed * rand(0.9, 1.1), dmg: Math.round(base.dmg * (1 + actIndex * 0.15)),
-    score: base.score, color: base.color, behavior: base.behavior, boss: !!base.boss,
-    fireCd: rand(0.5, 1.5), stateT: 0, vx: 0, vy: 0, flash: 0, aimA: 0,
-    strafeDir: Math.random() < 0.5 ? 1 : -1, dartT: 0, chargeT: 0, spawnT: 0.4,
-    phase: 1, summonCd: 4, spreadN: 0,
+export function saveGame() {
+  if (!player) return;
+  const data = {
+    name: state.name, appearance: state.appearance, trait: state.trait,
+    time: state.time, day: state.day, weather: state.weather,
+    money: state.money, bank: state.bank, bizBank: state.bizBank, credit: state.credit, loan: state.loan,
+    needs: state.needs, job: state.job, properties: state.properties, home: state.home,
+    businesses: state.businesses, inventory: state.inventory, ownedVehicles: state.ownedVehicles,
+    story: state.story, storyDone: state.storyDone, deliveries: state.deliveries, talks: state.talks,
+    relationships: state.relationships, flags: state.flags, xp: state.xp, level: state.level,
+    x: player.x, z: player.z,
   };
-  enemies.push(e);
-  burst(x, y, '#fff', 8, 200);
-  return e;
-}
-function spawnPos() {
-  for (let i = 0; i < 20; i++) {
-    const a = rand(0, TAU), d = rand(520, 800);
-    const x = clamp(player.x + Math.cos(a) * d, 90, WORLD.w - 90);
-    const y = clamp(player.y + Math.sin(a) * d, 90, WORLD.h - 90);
-    if (dist({ x, y }, player) > 460 && !bulletHitsWall(x, y)) return { x, y };
-  }
-  return { x: rand(200, WORLD.w - 200), y: 140 };
-}
-function startWave(i) {
-  const act = STORY.acts[actIndex];
-  waveIndex = i; waveState = 'fight';
-  spawnQueue = [];
-  const comp = act.waves[i];
-  for (const [t, n] of Object.entries(comp)) for (let k = 0; k < n; k++) spawnQueue.push(t);
-  // shuffle
-  spawnQueue.sort(() => Math.random() - 0.5);
-  waveTimer = 0;
-  centerMessage(`WAVE ${i + 1}`, 1.4);
-  subtitle(`${act.act} — ${act.name}: hostile wave ${i + 1} of ${act.waves.length}. They never learn.`);
-  ZAudio.wave(); ZAudio.startMusic(1 + actIndex * 0.4 + (bossActive ? 0.6 : 0));
-  // weapon crate drops to keep it fresh
-  if (i === 1) dropPickup(player.x + rand(-160, 160), player.y + rand(-160, 160), actIndex >= 1 ? 'RIFLE' : 'SMG');
-}
-function dropPickup(x, y, kind) {
-  x = clamp(x, 80, WORLD.w - 80); y = clamp(y, 80, WORLD.h - 80);
-  pickups.push({ x, y, kind, t: 0, life: 25, bob: rand(0, TAU) });
-}
-function maybeDrop(x, y) {
-  const r = Math.random();
-  if (r < 0.10) dropPickup(x, y, 'MEDKIT');
-  else if (r < 0.17) dropPickup(x, y, 'ARMOR');
-  else if (r < 0.26) dropPickup(x, y, 'AMMO');
-  else if (r < 0.30) dropPickup(x, y, 'GRENADE');
-  else if (r < 0.335) dropPickup(x, y, ['SMG', 'RIFLE', 'SHOTGUN'][randi(0, 2)]);
-}
-function spawnBoss() {
-  const type = STORY.acts[actIndex].boss;
-  const p = spawnPos();
-  boss = spawnEnemy(type, p.x, p.y);
-  bossActive = true;
-  centerMessage(`☠ ${boss.name} ☠`, 2.2);
-  subtitle(boss.name === 'BRUTUS, THE WALL' ? 'He flips cars for fun. Keep moving. Shoot the big guy!' : boss.name === 'VIPER' ? 'She never misses. Make her miss.' : 'The Falcon himself. End this. NOW.');
-  ZAudio.boss(); ZAudio.startMusic(2);
-  feed(`⚠ BOSS: ${boss.name}`);
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
 }
 
-// ---------- combat helpers ----------
-function burst(x, y, color, n, spd, life = 0.6, size = 4) {
-  for (let i = 0; i < n; i++) {
-    const a = rand(0, TAU), s = rand(spd * 0.3, spd);
-    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(life * 0.4, life), maxLife: life, color, size: rand(size * 0.4, size), drag: 4 });
-  }
-}
-function blood(x, y, n = 10) { burst(x, y, '#c1121f', n, 320, 0.5, 4); burst(x, y, '#ff6b6b', Math.floor(n / 2), 200, 0.4, 3); }
-function sparks(x, y, n = 8) { burst(x, y, '#ffd166', n, 420, 0.35, 3); }
-function smoke(x, y, n = 8) { for (let i = 0; i < n; i++) parts.push({ x: x + rand(-8, 8), y: y + rand(-8, 8), vx: rand(-40, 40), vy: rand(-90, -30), life: rand(0.6, 1.3), maxLife: 1.3, color: 'rgba(120,120,130,0.5)', size: rand(8, 18), drag: 1, grow: true }); }
-function dmgNum(x, y, txt, color = '#fff', big = false) { dmgNums.push({ x: x + rand(-10, 10), y: y - 18, txt: String(txt), color, life: 0.9, big }); }
-function addShake(v) { shake = Math.min(26, shake + v); }
-function flash(v = 0.5) { flashA = Math.max(flashA, v); }
-function addScore(base, x, y) {
-  const pts = base * combo;
-  score += pts;
-  style += Math.floor(base / 20);
-  dmgNum(x, y, '+' + pts, combo > 1 ? '#f5c518' : '#fff', combo >= 4);
-}
-function bumpCombo() {
-  combo = Math.min(9, combo + 1); comboTimer = 3.2;
-  if (combo >= 3) { slowmoMeter = Math.min(100, slowmoMeter + 6); }
-}
-
-function fireBullet(x, y, angle, def, friendly, dmgMul = 1) {
-  const spread = def.spread || 0;
-  const n = def.pellets || 1;
-  for (let i = 0; i < n; i++) {
-    const a = angle + rand(-spread, spread) + (n > 1 ? (i / (n - 1) - 0.5) * 0.35 : 0);
-    const b = { x, y, vx: Math.cos(a) * def.speed, vy: Math.sin(a) * def.speed, dmg: Math.round(def.dmg * dmgMul), life: 1.4, color: def.color || '#fff', r: n > 1 ? 3 : 4, friendly };
-    (friendly ? bullets : ebullets).push(b);
-  }
-  // muzzle + casing
-  burst(x, y, '#ffe66d', 4, 260, 0.15, 5);
-  if (friendly) casings.push({ x, y, vx: Math.cos(angle + Math.PI / 2) * rand(80, 160), vy: Math.sin(angle + Math.PI / 2) * rand(80, 160) - 60, rot: rand(0, TAU), vr: rand(-12, 12), life: 1.1 });
-}
-
-function explode(x, y, radius, dmg, friendly) {
-  ZAudio.explosion();
-  addShake(friendly ? 10 : 14); flash(0.35);
-  burst(x, y, '#ff9a3d', 26, 520, 0.7, 7);
-  burst(x, y, '#ff2a2a', 18, 380, 0.6, 6);
-  burst(x, y, '#fff', 10, 300, 0.3, 4);
-  smoke(x, y, 10);
-  // shockwave ring
-  parts.push({ x, y, ring: true, r0: 10, r1: radius + 30, life: 0.35, maxLife: 0.35, color: '#ffd166' });
-  if (friendly) {
-    for (const e of enemies) {
-      const d = Math.hypot(e.x - x, e.y - y);
-      if (d < radius + e.r) hurtEnemy(e, Math.round(dmg * (1 - d / (radius * 1.4))), x, y);
-    }
+export function setPaused(v) {
+  if (v) {
+    if (state.mode === 'play' || state.mode === 'interior') state._resume = state.mode;
+    state.mode = 'pause';
+    document.exitPointerLock?.();
   } else {
-    const d = Math.hypot(player.x - x, player.y - y);
-    if (d < radius && player.iframes <= 0 && player.dashT <= 0) hurtPlayer(Math.round(dmg * (1 - d / (radius * 1.5))));
+    state.mode = state._resume || 'play';
   }
 }
 
-function hurtEnemy(e, dmg, fromX, fromY) {
-  if (e.spawnT > 0) return;
-  e.hp -= dmg; e.flash = 0.12;
-  ZAudio.hit();
-  // knockback
-  const a = Math.atan2(e.y - fromY, e.x - fromX);
-  const kb = e.boss ? 20 : 130;
-  e.vx += Math.cos(a) * kb; e.vy += Math.sin(a) * kb;
-  blood(e.x, e.y, e.boss ? 4 : 8);
-  dmgNum(e.x, e.y, dmg, '#ffd166');
-  if (e.hp <= 0) killEnemy(e);
-}
-function killEnemy(e) {
-  e.dead = true;
-  kills++; bumpCombo();
-  addScore(e.score, e.x, e.y);
-  ZAudio.kill();
-  blood(e.x, e.y, e.boss ? 40 : 18);
-  smoke(e.x, e.y, 4);
-  addShake(e.boss ? 16 : 3);
-  hitStop = Math.max(hitStop, e.boss ? 0.35 : 0.05);
-  slowmoMeter = Math.min(100, slowmoMeter + (e.boss ? 50 : 4));
-  maybeDrop(e.x, e.y);
-  feed(`${e.name} ELIMINATED  +${(e.score * combo).toLocaleString()}`);
-  if (e.boss) {
-    explode(e.x, e.y, 160, 0, true);
-    bossActive = false; boss = null;
-    flash(0.6);
-    centerMessage('TARGET DOWN', 2);
-    // heal + reward
-    player.hp = Math.min(player.maxHp, player.hp + 35);
-    dropPickup(e.x + 40, e.y, 'MEDKIT'); dropPickup(e.x - 40, e.y, 'AMMO');
-    slowmoMeter = 100;
-    ZAudio.sting(true);
-  }
-}
-function hurtPlayer(dmg) {
-  if (player.iframes > 0 || player.dashT > 0 || player.dead || state !== 'play') return;
-  if (player.armor > 0) {
-    const absorbed = Math.min(player.armor, Math.round(dmg * 0.6));
-    player.armor -= absorbed; dmg -= absorbed;
-    sparks(player.x, player.y, 6);
-  }
-  player.hp -= dmg;
-  player.iframes = 0.35;
-  ZAudio.hurt();
-  addShake(8); flash(0.15);
-  blood(player.x, player.y, 8);
-  dmgNum(player.x, player.y, '-' + dmg, '#ff6b6b', true);
-  combo = 1; style = Math.max(0, style - 30);
-  if (player.hp <= 0) { player.hp = 0; die(); }
-}
-function die() {
-  if (player.dead) return;
-  player.dead = true;
-  ZAudio.sting(false); ZAudio.stopMusic();
-  slowmoActive = false; timeScale = 0.25;
-  blood(player.x, player.y, 40);
-  addShake(20);
-  setTimeout(() => {
-    if (state !== 'play') return;
-    state = 'gameover'; timeScale = 1;
-    hide('hud'); setCinema(true);
-    $('go-stats').innerHTML = `${STORY.acts[actIndex].act} — ${STORY.acts[actIndex].name} &nbsp;•&nbsp; SCORE <b>${score.toLocaleString()}</b> &nbsp;•&nbsp; KILLS <b>${kills}</b>`;
-    show('gameover');
-    if (score > best()) setBest(score);
-  }, 1400);
-}
+export function setPhoneOpen(v) { state.phoneOpen = v; if (v) document.exitPointerLock?.(); }
+export function setUIBlock(v) { state.uiBlock = v; if (v) document.exitPointerLock?.(); }
 
-// ---------- player actions ----------
-function tryDash() {
-  if (state !== 'play' || player.dead || player.dashCd > 0) return;
-  let dx = 0, dy = 0;
-  if (keys.KeyW || keys.ArrowUp) dy -= 1;
-  if (keys.KeyS || keys.ArrowDown) dy += 1;
-  if (keys.KeyA || keys.ArrowLeft) dx -= 1;
-  if (keys.KeyD || keys.ArrowRight) dx += 1;
-  dx += sticks.left.x; dy += sticks.left.y;
-  if (dx === 0 && dy === 0) { dx = Math.cos(player.aim); dy = Math.sin(player.aim); }
-  const m = Math.hypot(dx, dy); dx /= m; dy /= m;
-  player.dashT = 0.22; player.dashCd = 1.1;
-  player.dashDx = dx; player.dashDy = dy;
-  player.iframes = Math.max(player.iframes, 0.28);
-  ZAudio.dash();
-  burst(player.x, player.y, '#7cc4ff', 10, 300, 0.4, 4);
-}
-function toggleSlowmo(force) {
-  if (state !== 'play' || player.dead) return;
-  const want = force !== undefined ? force : !slowmoActive;
-  if (want && slowmoMeter < 20) { subtitle('Z-TIME recharging… get kills to charge it!'); return; }
-  slowmoActive = want;
-  ZAudio.slowmo(want);
-  if (want) { flash(0.12); feed('⏳ Z-TIME ENGAGED'); }
-}
-function throwGrenade() {
-  if (state !== 'play' || player.dead || player.grenades <= 0) return;
-  player.grenades--;
-  ZAudio.grenade();
-  const range = 420;
-  const gx = player.x + Math.cos(player.aim) * Math.min(range, 260 + Math.random() * 120);
-  const gy = player.y + Math.sin(player.aim) * Math.min(range, 260 + Math.random() * 120);
-  grenades.push({ x: player.x, y: player.y, sx: player.x, sy: player.y, tx: gx, ty: gy, t: 0, dur: 0.55, fuse: 0.9 });
-  feed('💣 GRENADE OUT');
-}
-function reload() {
-  const w = player.weapons[player.cur], def = WEAPONS[player.cur];
-  if (player.reloadT > 0 || w.mag >= def.mag || w.reserve <= 0) return;
-  player.reloadT = player.cur === 'SHOTGUN' ? 1.3 : 0.85;
-  ZAudio.reload();
-}
-function switchWeapon(name) {
-  if (!player.weapons[name].unlocked || player.cur === name) return;
-  player.cur = name; player.reloadT = 0; player.fireCd = 0.15;
-  ZAudio.ui();
-}
-
-// ---------- act flow ----------
-function startAct(i, skipBriefing = false) {
-  actIndex = i; waveIndex = -1; waveState = 'between'; waveTimer = 1.2;
-  enemies = []; bullets = []; ebullets = []; pickups = []; grenades = []; parts = []; casings = []; dmgNums = [];
-  boss = null; bossActive = false;
-  player.x = WORLD.w / 2; player.y = WORLD.h / 2;
-  player.hp = player.maxHp; player.dead = false;
-  player.grenades = Math.max(player.grenades, 3);
-  slowmoActive = false; slowmoMeter = Math.max(slowmoMeter, 60); combo = 1;
-  buildMap(i);
-  // guarantee starter crates
-  dropPickup(player.x - 140, player.y - 100, 'SMG');
-  if (i >= 1) dropPickup(player.x + 140, player.y - 100, 'RIFLE');
-  if (i >= 2) dropPickup(player.x, player.y + 160, 'SHOTGUN');
-  dropPickup(player.x - 120, player.y + 140, 'ARMOR');
-  const begin = () => {
-    state = 'play';
-    hide('menu'); hide('pause'); hide('gameover'); hide('victory'); hide('cutscene');
-    show('hud');
-    if (isTouch) $('touch-ui').classList.remove('hidden');
-    setCinema(false);
-    updateHUD();
-    try { localStorage.setItem('zach_act', String(i)); } catch (e) {}
-  };
-  if (skipBriefing) { begin(); return; }
-  playCutscene(STORY.acts[i].briefing(), begin);
-}
-function actComplete() {
-  ZAudio.stopMusic();
-  playCutscene(STORY.acts[actIndex].outro(), () => {
-    if (actIndex >= 2) { victory(); return; }
-    startAct(actIndex + 1);
-  });
-}
-function victory() {
-  state = 'victory'; ZAudio.sting(true);
-  hide('hud'); $('touch-ui').classList.add('hidden'); setCinema(true);
-  const t = Math.floor(runTime), mmT = Math.floor(t / 60), ss = String(t % 60).padStart(2, '0');
-  $('final-score').textContent = score.toLocaleString();
-  $('final-kills').textContent = kills;
-  $('final-time').textContent = `${mmT}:${ss}`;
-  const b = Math.max(best(), score);
-  setBest(b); $('final-best').textContent = b.toLocaleString();
-  try { localStorage.setItem('zach_act', '0'); } catch (e) {}
-  show('victory');
-}
-
-// ---------- update ----------
-let lastT = performance.now();
-function loop(t) {
+function loop() {
   requestAnimationFrame(loop);
-  let dt = Math.min(0.05, (t - lastT) / 1000);
-  lastT = t;
-  if (state === 'play') {
-    // Z-time
-    if (slowmoActive) {
-      slowmoMeter -= dt * 30;
-      if (slowmoMeter <= 0) { slowmoMeter = 0; toggleSlowmo(false); }
-      timeScale = lerp(timeScale, 0.28, 0.2);
-    } else {
-      timeScale = lerp(timeScale, hitStop > 0 ? 0.05 : 1, 0.25);
-      slowmoMeter = Math.min(100, slowmoMeter + dt * 3.5);
-    }
-    hitStop = Math.max(0, hitStop - dt);
-    const gdt = dt * timeScale;
-    runTime += dt;
-    updatePlayer(dt, gdt);
-    updateWaves(dt);
-    updateEnemies(gdt, dt);
-    updateBullets(gdt);
-    updateGrenades(gdt);
-    updatePickups(gdt);
-    updateFx(dt, gdt);
-    updateCamera(dt);
-    updateHUD();
-    drawMinimap();
-  } else if (state === 'menu' || state === 'cutscene') {
-    updateFx(dt, dt);
-  }
-  render();
-  // flash decay
-  if (flashA > 0) { flashA = Math.max(0, flashA - dt * 2.2); $('flash').style.opacity = flashA; }
-  if (centerMsgTimer > 0) { centerMsgTimer -= dt; if (centerMsgTimer <= 0) $('center-message').classList.add('hidden'); }
-  if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 1; }
-}
+  const dt = Math.min(0.05, clock.getDelta());
+  audio.tick(dt);
+  if (!state.ready) return;
 
-function updatePlayer(dt, gdt) {
-  if (player.dead) return;
-  // aim
-  if (isTouch && (Math.abs(sticks.right.x) > 0.2 || Math.abs(sticks.right.y) > 0.2)) {
-    player.aim = Math.atan2(sticks.right.y, sticks.right.x);
-  } else {
-    player.aim = Math.atan2(mouse.y + camera.y - player.y, mouse.x + camera.x - player.x);
-  }
-  // move
-  let dx = 0, dy = 0;
-  if (keys.KeyW || keys.ArrowUp) dy -= 1;
-  if (keys.KeyS || keys.ArrowDown) dy += 1;
-  if (keys.KeyA || keys.ArrowLeft) dx -= 1;
-  if (keys.KeyD || keys.ArrowRight) dx += 1;
-  dx += sticks.left.x; dy += sticks.left.y;
-  const m = Math.hypot(dx, dy);
-  if (m > 1) { dx /= m; dy /= m; }
-  player.dashCd = Math.max(0, player.dashCd - dt);
-  player.iframes = Math.max(0, player.iframes - dt);
-  player.fireCd = Math.max(0, player.fireCd - dt);
-  if (keys.ShiftLeft || keys.ShiftRight) { tryDash(); keys.ShiftLeft = keys.ShiftRight = false; }
-  if (player.dashT > 0) {
-    player.dashT -= dt;
-    const sp = 950;
-    const p = collideCircle(player.x + player.dashDx * sp * gdt, player.y + player.dashDy * sp * gdt, player.r);
-    player.x = p.x; player.y = p.y;
-    parts.push({ x: player.x, y: player.y, vx: 0, vy: 0, life: 0.3, maxLife: 0.3, color: 'rgba(124,196,255,.6)', size: 16, drag: 0, ghost: true });
-  } else {
-    const sp = player.speed;
-    const p = collideCircle(player.x + dx * sp * gdt, player.y + dy * sp * gdt, player.r);
-    player.x = p.x; player.y = p.y;
-  }
-  // keys: 1-4 weapons, R reload, E grenade, Space slowmo
-  if (keys.Digit1) switchWeapon('PISTOL');
-  if (keys.Digit2) switchWeapon('SMG');
-  if (keys.Digit3) switchWeapon('RIFLE');
-  if (keys.Digit4) switchWeapon('SHOTGUN');
-  if (keys.KeyR) { reload(); keys.KeyR = false; }
-  if (keys.KeyE || keys.KeyQ) { throwGrenade(); keys.KeyE = keys.KeyQ = false; }
-  if (keys.Space) { toggleSlowmo(); keys.Space = false; }
-  // reload timer
-  if (player.reloadT > 0) {
-    player.reloadT -= dt;
-    if (player.reloadT <= 0) {
-      const w = player.weapons[player.cur], def = WEAPONS[player.cur];
-      const need = def.mag - w.mag;
-      const take = w.reserve === Infinity ? need : Math.min(need, w.reserve);
-      w.mag += take;
-      if (w.reserve !== Infinity) w.reserve -= take;
-    }
-  }
-  // fire
-  const wdat = player.weapons[player.cur], def = WEAPONS[player.cur];
-  const wantFire = mouse.down || (isTouch && Math.hypot(sticks.right.x, sticks.right.y) > 0.55);
-  if (wantFire && player.fireCd <= 0 && player.reloadT <= 0 && player.dashT <= 0) {
-    if (!def.auto && !mouse._clicked && !isTouch) { /* semi */ }
-    if (wdat.mag > 0) {
-      wdat.mag--;
-      player.fireCd = def.rate;
-      const gx = player.x + Math.cos(player.aim) * 26, gy = player.y + Math.sin(player.aim) * 26;
-      fireBullet(gx, gy, player.aim, def, true);
-      ZAudio.shoot(player.cur);
-      addShake(def.kick / 90);
-      // recoil
-      const p = collideCircle(player.x - Math.cos(player.aim) * def.kick * gdt * 0.4, player.y - Math.sin(player.aim) * def.kick * gdt * 0.4, player.r);
-      player.x = p.x; player.y = p.y;
-      if (wdat.mag === 0) reload();
-    } else { reload(); player.fireCd = 0.25; }
-  }
-  mouse._clicked = false;
-}
-canvas.addEventListener('mousedown', () => mouse._clicked = true);
-
-function updateWaves(dt) {
-  if (bossActive) {
-    if (!boss || boss.dead) { /* handled in killEnemy */ }
-    else return;
-    if (!bossActive && enemies.length === 0) { waveState = 'done'; waveTimer = 1.5; bossActive = false; }
+  if (state.mode === 'intro') {
+    updateIntro(dt);
+    updateSky();
+    composer.render();
     return;
   }
-  const act = STORY.acts[actIndex];
-  if (waveState === 'between') {
-    waveTimer -= dt;
-    if (waveTimer <= 0) {
-      if (waveIndex + 1 < act.waves.length) startWave(waveIndex + 1);
-      else { spawnBoss(); waveState = 'boss'; }
+
+  if (state.mode === 'play' || state.mode === 'interior') {
+    updateTime(dt);
+    updateWeather(dt);
+    if (state.mode === 'play') {
+      updatePlayer(dt);
+      updateNPCs(dt);
+      updateVehicles(dt);
+      updateTraffic(dt);
+    } else {
+      updateInteriorPlayer(dt);
     }
-  } else if (waveState === 'fight') {
-    // trickle spawns
-    waveTimer += dt;
-    if (spawnQueue.length && waveTimer > 0.35 && enemies.length < 14) {
-      waveTimer = 0;
-      const n = Math.min(spawnQueue.length, randi(1, 3));
-      for (let i = 0; i < n; i++) { const p = spawnPos(); spawnEnemy(spawnQueue.pop(), p.x, p.y); }
-    }
-    if (!spawnQueue.length && enemies.length === 0) {
-      if (waveIndex + 1 < act.waves.length) {
-        waveState = 'between'; waveTimer = 2.2;
-        centerMessage('WAVE CLEAR', 1.2);
-        player.hp = Math.min(player.maxHp, player.hp + 12);
-        ZAudio.pickup();
-      } else { spawnBoss(); waveState = 'boss'; }
-    }
-  } else if (waveState === 'boss') {
-    if (!bossActive && enemies.length === 0) {
-      waveState = 'done'; waveTimer = 2;
-      centerMessage(`${act.act} COMPLETE`, 2);
-    }
-  } else if (waveState === 'done') {
-    waveTimer -= dt;
-    // cleanup boss leftovers
-    if (waveTimer <= 0) actComplete();
+    updateNeeds(dt);
+    updateLooking();
+    updateMissions();
+    updateMarker();
+    saveAcc += dt;
+    if (saveAcc > 20) { saveAcc = 0; saveGame(); }
+  } else if (state.mode === 'menu') {
+    camYaw += dt * 0.05;
+    camera.position.set(Math.sin(camYaw) * 90, 42, Math.cos(camYaw) * 90);
+    camera.lookAt(0, 18, 40);
+    updateSky();
+  }
+
+  updateSky();
+  updateRain(dt);
+  if (player && playerMesh && state.mode !== 'menu') updateCamera(dt);
+  if (flash > 0) {
+    flash -= dt;
+    renderer.toneMappingExposure = 3;
+  } else if (state.mode !== 'menu') {
+    renderer.toneMappingExposure = 0.95 + (1 - night01) * 0.2;
+  }
+  bloom.strength = 0.12 + night01 * 0.55;
+  composer.render();
+}
+
+function updateIntro(dt) {
+  introT += dt;
+  const t = Math.min(1, introT / 5.5);
+  const ease = 1 - Math.pow(1 - t, 3);
+  const px = player.x, pz = player.z;
+  camera.position.set(
+    px + Math.sin(0.8) * (80 - ease * 72),
+    55 - ease * 48,
+    pz + Math.cos(0.8) * (80 - ease * 72)
+  );
+  camera.lookAt(px, 1.4, pz);
+  if (introT > 5.8) {
+    state.mode = 'play';
+    emit('notify', { text: 'Your studio is behind you. The city is ahead.', kind: 'story' });
   }
 }
 
-function updateEnemies(gdt, rdt) {
-  for (const e of enemies) {
-    if (e.dead) continue;
-    e.flash = Math.max(0, e.flash - gdt);
-    e.spawnT = Math.max(0, e.spawnT - gdt);
-    e.fireCd -= gdt; e.stateT += gdt;
-    // friction for knockback
-    e.x += e.vx * gdt; e.y += e.vy * gdt;
-    e.vx *= (1 - 6 * gdt); e.vy *= (1 - 6 * gdt);
-    const d = dist(e, player), a = angTo(e, player);
-    const slow = slowmoActive ? 1 : 1; // enemies already slowed by gdt
-    const mv = (aa, sp) => {
-      const p = collideCircle(e.x + Math.cos(aa) * sp * gdt * slow, e.y + Math.sin(aa) * sp * gdt * slow, e.r);
-      e.x = p.x; e.y = p.y;
-    };
-    switch (e.behavior) {
-      case 'chase': {
-        mv(a, e.speed);
-        if (d < e.r + player.r + 6 && e.fireCd <= 0) { e.fireCd = 0.9; hurtPlayer(e.dmg); burst(player.x, player.y, '#fff', 6, 200, 0.3, 3); }
-        break;
-      }
-      case 'dart': {
-        e.dartT -= gdt;
-        if (e.dartT <= 0) { e.dartT = rand(0.7, 1.4); e.aimA = a + rand(-0.4, 0.4); }
-        mv(e.aimA, e.speed * (d > 200 ? 1.2 : 0.9));
-        if (d < e.r + player.r + 4 && e.fireCd <= 0) { e.fireCd = 0.6; hurtPlayer(e.dmg); }
-        break;
-      }
-      case 'strafe': {
-        const want = 380;
-        if (d > want + 60) mv(a, e.speed);
-        else if (d < want - 120) mv(a + Math.PI, e.speed);
-        else mv(a + Math.PI / 2 * e.strafeDir, e.speed * 0.7);
-        if (Math.random() < gdt * 0.5) e.strafeDir *= -1;
-        if (e.fireCd <= 0 && d < 640 && lineOfSight(e, player)) {
-          e.fireCd = rand(1.1, 1.9) - actIndex * 0.12;
-          fireBullet(e.x, e.y, a + rand(-0.08, 0.08), { dmg: e.dmg, speed: 460, spread: 0.03, color: '#c77cff' }, false);
-          ZAudio.enemyShoot();
-        }
-        break;
-      }
-      case 'snipe': {
-        if (d > 560) mv(a, e.speed); else if (d < 300) mv(a + Math.PI, e.speed);
-        else mv(a + Math.PI / 2 * e.strafeDir, e.speed * 0.4);
-        e.aimA = a; // laser tracks
-        if (e.fireCd <= 0 && d < 800 && lineOfSight(e, player)) {
-          e.fireCd = rand(2.2, 3.0);
-          // windup then fire
-          e.windup = 0.6;
-        }
-        if (e.windup !== undefined && e.windup > 0) {
-          e.windup -= gdt; e.aimA = a;
-          if (e.windup <= 0) {
-            fireBullet(e.x, e.y, e.aimA, { dmg: e.dmg, speed: 900, spread: 0, color: '#ff4d4d' }, false);
-            ZAudio.enemyShoot(); e.windup = 0;
-          }
-        }
-        break;
-      }
-      case 'brute': { // ACT 1 boss: charges + shockwave slam
-        e.chargeT -= gdt;
-        if (e.stateT > 2.5 && e.chargeT <= 0 && d > 200) { e.charging = 0.8; e.chargeT = 4; e.aimA = a; ZAudio.dash(); feed('⚠ BRUTUS IS CHARGING!'); }
-        if (e.charging > 0) {
-          e.charging -= gdt;
-          mv(e.aimA, 560);
-          burst(e.x, e.y, '#ff5252', 2, 200, 0.3, 5);
-          if (d < e.r + player.r + 10) { e.charging = 0; hurtPlayer(e.dmg + 8); addShake(10); }
-        } else {
-          mv(a, e.speed);
-          if (d < 130 && e.fireCd <= 0) { // slam
-            e.fireCd = 2.2;
-            explode(e.x, e.y, 170, 18, false);
-            // ring of bullets
-            for (let i = 0; i < 10; i++) fireBullet(e.x, e.y, (i / 10) * TAU, { dmg: 10, speed: 300, color: '#ff9a3d' }, false);
-          }
-        }
-        break;
-      }
-      case 'viper': { // ACT 2 boss: fast dashes + fan shots + summons
-        e.summonCd -= gdt;
-        e.dartT -= gdt;
-        if (e.dartT <= 0) { e.dartT = rand(0.8, 1.4); e.aimA = a + rand(-1, 1); burst(e.x, e.y, '#7cff9e', 8, 300, 0.3, 4); }
-        const want = 340;
-        mv(d > want ? a : e.aimA, e.speed);
-        if (e.fireCd <= 0 && lineOfSight(e, player)) {
-          e.fireCd = e.hp < e.maxHp * 0.4 ? 0.9 : 1.3;
-          const base = a;
-          for (let i = -2; i <= 2; i++) fireBullet(e.x, e.y, base + i * 0.14, { dmg: 12, speed: 520, color: '#7cff9e' }, false);
-          ZAudio.enemyShoot();
-        }
-        if (e.summonCd <= 0 && enemies.length < 8) {
-          e.summonCd = 7;
-          feed('VIPER calls reinforcements!');
-          for (let i = 0; i < 3; i++) { const p = spawnPos(); spawnEnemy('runner', p.x, p.y); }
-        }
-        break;
-      }
-      case 'falcon': { // final boss: phases
-        const frac = e.hp / e.maxHp;
-        e.phase = frac < 0.33 ? 3 : frac < 0.66 ? 2 : 1;
-        if (e.phase !== e.lastPhase) {
-          e.lastPhase = e.phase;
-          centerMessage(e.phase === 2 ? 'FALCON: PHASE 2' : 'FALCON: FINAL FURY', 1.6);
-          explode(e.x, e.y, 220, 0, true);
-          ZAudio.boss();
-        }
-        e.summonCd -= gdt;
-        // movement: stalk + teleport dash in phase 3
-        if (e.phase === 3 && Math.random() < gdt * 0.8) {
-          burst(e.x, e.y, '#ff2a2a', 20, 400, 0.4, 5);
-          const p = spawnPos(); e.x = p.x; e.y = p.y;
-          burst(e.x, e.y, '#ff2a2a', 20, 400, 0.4, 5);
-        } else mv(a, e.speed * (e.phase === 3 ? 1.4 : 1));
-        if (e.fireCd <= 0 && d < 700) {
-          e.fireCd = e.phase === 1 ? 1.5 : e.phase === 2 ? 1.0 : 0.7;
-          if (e.phase === 1) {
-            for (let i = 0; i < 8; i++) fireBullet(e.x, e.y, (i / 8) * TAU + e.stateT, { dmg: 12, speed: 340, color: '#ff2a2a' }, false);
-          } else if (e.phase === 2) {
-            for (let i = -3; i <= 3; i++) fireBullet(e.x, e.y, a + i * 0.12, { dmg: 13, speed: 560, color: '#ff9a3d' }, false);
-          } else {
-            for (let i = 0; i < 12; i++) fireBullet(e.x, e.y, rand(0, TAU), { dmg: 11, speed: 420, color: '#ff2a2a' }, false);
-            if (lineOfSight(e, player)) fireBullet(e.x, e.y, a, { dmg: 20, speed: 800, color: '#fff' }, false);
-          }
-          ZAudio.enemyShoot();
-        }
-        if (e.summonCd <= 0 && enemies.length < 7) {
-          e.summonCd = e.phase === 3 ? 5 : 8;
-          const p = spawnPos(); spawnEnemy(Math.random() < 0.5 ? 'gunman' : 'thug', p.x, p.y);
-          feed('FALCON summons a guard!');
-        }
-        if (d < e.r + player.r + 8 && e.fireCd <= -0.5) { hurtPlayer(e.dmg); }
-        break;
-      }
-    }
-    // separation
-    for (const o of enemies) {
-      if (o === e || o.dead) continue;
-      const dd = dist(e, o), min = e.r + o.r;
-      if (dd > 0 && dd < min) {
-        const push = (min - dd) * 0.5;
-        const aa = Math.atan2(e.y - o.y, e.x - o.x);
-        e.x += Math.cos(aa) * push * 0.5; e.y += Math.sin(aa) * push * 0.5;
-      }
-    }
+function hour() { return (state.time / 60) % 24; }
+
+function updateTime(dt) {
+  const before = Math.floor(state.time / 60);
+  state.time += (dt * 1000) / MINUTE_MS;
+  if (state.time >= 24 * 60) {
+    state.time -= 24 * 60;
+    state.day += 1;
+    onNewDay();
   }
-  enemies = enemies.filter(e => !e.dead);
+  const after = Math.floor(state.time / 60);
+  if (after !== before) emit('time', { time: state.time, day: state.day, weather: state.weather });
 }
 
-function updateBullets(gdt) {
-  for (const b of bullets) {
-    b.life -= gdt;
-    b.x += b.vx * gdt; b.y += b.vy * gdt;
-    if (b.life <= 0 || bulletHitsWall(b.x, b.y)) { b.dead = true; sparks(b.x, b.y, 3); continue; }
-    for (const e of enemies) {
-      if (e.dead || e.spawnT > 0) continue;
-      if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + b.r) {
-        // headshot-ish bonus for close range
-        hurtEnemy(e, b.dmg, b.x - b.vx * 0.02, b.y - b.vy * 0.02);
-        b.dead = true; break;
-      }
-    }
+function onNewDay() {
+  emit('notify', { text: `Day ${state.day} in New Aurora.`, kind: 'info' });
+  for (const b of state.businesses) {
+    const def = BUSINESSES.find((x) => x.id === b.id);
+    if (!def) continue;
+    const [lo, hi] = def.income;
+    const pay = Math.round((lo + Math.random() * (hi - lo)) * (1 + 0.18 * (b.level || 0)));
+    state.bizBank += pay;
+    emit('notify', { text: `${def.name} earned $${pay}.`, kind: 'cash' });
   }
-  bullets = bullets.filter(b => !b.dead);
-  for (const b of ebullets) {
-    b.life -= gdt;
-    b.x += b.vx * gdt; b.y += b.vy * gdt;
-    if (b.life <= 0 || bulletHitsWall(b.x, b.y)) { b.dead = true; continue; }
-    if (!player.dead && Math.hypot(player.x - b.x, player.y - b.y) < player.r + b.r - 2) {
-      // dash dodge = style!
-      if (player.dashT > 0) { style += 4; dmgNum(player.x, player.y - 10, 'DODGED!', '#7cc4ff'); }
-      else hurtPlayer(b.dmg);
-      b.dead = true;
-    }
-  }
-  ebullets = ebullets.filter(b => !b.dead);
-}
-
-function updateGrenades(gdt) {
-  for (const g of grenades) {
-    g.t += gdt;
-    const k = Math.min(1, g.t / g.dur);
-    g.x = lerp(g.sx, g.tx, k); g.y = lerp(g.sy, g.ty, k);
-    g.fuse -= gdt;
-    if (g.fuse <= 0) { g.dead = true; explode(g.tx, g.ty, 190, 160, true); }
-  }
-  grenades = grenades.filter(g => !g.dead);
-}
-
-function updatePickups(gdt) {
-  for (const p of pickups) {
-    p.t += gdt; p.life -= gdt;
-    if (p.life <= 0) { p.dead = true; continue; }
-    if (dist(p, player) < player.r + 20) {
-      p.dead = true;
-      ZAudio.pickup(); flash(0.08);
-      const w = WEAPONS[p.kind];
-      if (w) {
-        const inv = player.weapons[p.kind];
-        inv.unlocked = true;
-        inv.mag = WEAPONS[p.kind].mag;
-        inv.reserve = Math.min(inv.reserve + WEAPONS[p.kind].reserve === Infinity ? 0 : WEAPONS[p.kind].reserve, WEAPONS[p.kind].reserve * 2 || 999);
-        if (WEAPONS[p.kind].reserve !== Infinity) inv.reserve = Math.max(inv.reserve, WEAPONS[p.kind].reserve);
-        player.cur = p.kind;
-        feed(`🔫 ${p.kind} ACQUIRED!`); subtitle(`${p.kind} online. [1-4] to swap. Make it loud.`);
-        centerMessage(p.kind, 0.9);
-      } else if (p.kind === 'MEDKIT') { player.hp = Math.min(player.maxHp, player.hp + 40); feed('✚ +40 HP'); }
-      else if (p.kind === 'ARMOR') { player.armor = Math.min(player.maxArmor, player.armor + 35); feed('🛡 +ARMOR'); }
-      else if (p.kind === 'AMMO') {
-        for (const k of Object.keys(player.weapons)) {
-          const inv = player.weapons[k];
-          if (inv.unlocked && WEAPONS[k].reserve !== Infinity) inv.reserve += WEAPONS[k].mag * 2;
-        }
-        feed('📦 AMMO RESTOCKED');
-      }
-      else if (p.kind === 'GRENADE') { player.grenades = Math.min(6, player.grenades + 2); feed('💣 +2 GRENADES'); }
-    }
-  }
-  pickups = pickups.filter(p => !p.dead);
-}
-
-function updateFx(dt, gdt) {
-  for (const p of parts) {
-    p.life -= gdt;
-    if (p.ring) continue;
-    p.x += (p.vx || 0) * gdt; p.y += (p.vy || 0) * gdt;
-    const dr = 1 - Math.min(0.9, (p.drag || 0) * gdt);
-    if (p.vx) { p.vx *= dr; p.vy *= dr; }
-    if (p.grow) p.size += gdt * 14;
-  }
-  parts = parts.filter(p => p.life > 0);
-  for (const c of casings) { c.life -= dt; c.x += c.vx * dt; c.y += c.vy * dt; c.vx *= 0.94; c.vy *= 0.94; c.rot += c.vr * dt; }
-  for (let i = casings.length - 1; i >= 0; i--) if (casings[i].life <= 0) casings.splice(i, 1);
-  if (casings.length > 120) casings.splice(0, casings.length - 120);
-  for (const d of dmgNums) { d.life -= dt; d.y -= dt * 60; }
-  for (let i = dmgNums.length - 1; i >= 0; i--) if (dmgNums[i].life <= 0) dmgNums.splice(i, 1);
-  shake = Math.max(0, shake - dt * 40);
-  // rain
-  const theme = STORY.acts[actIndex] && STORY.acts[actIndex].theme;
-  if (state === 'play' && theme && theme.rain) {
-    for (const r of rain) { r.y += r.s * dt; r.x -= r.s * dt * 0.15; if (r.y > H) { r.y = -10; r.x = rand(0, W + 100); } }
-  }
-}
-
-function updateCamera(dt) {
-  // look-ahead toward aim
-  const lx = player.x + Math.cos(player.aim) * 90, ly = player.y + Math.sin(player.aim) * 90;
-  camera.x = lerp(camera.x, lx - W / 2, 1 - Math.pow(0.001, dt));
-  camera.y = lerp(camera.y, ly - H / 2, 1 - Math.pow(0.001, dt));
-  camera.x = clamp(camera.x, -80, WORLD.w - W + 80);
-  camera.y = clamp(camera.y, -80, WORLD.h - H + 80);
-}
-
-// ---------- render ----------
-function render() {
-  const theme = (STORY.acts[actIndex] && STORY.acts[actIndex].theme) || { ground: '#1b2230', road: '#11151d', accent: '#f5c518', night: 0.3 };
-  // ground
-  ctx.fillStyle = theme.ground;
-  ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  const shx = shake > 0 ? rand(-shake, shake) * 0.5 : 0;
-  const shy = shake > 0 ? rand(-shake, shake) * 0.5 : 0;
-  ctx.translate(-camera.x + shx, -camera.y + shy);
-
-  if (state === 'play' || state === 'pause' || state === 'gameover') {
-    // streets grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 2;
-    for (let x = 0; x <= WORLD.w; x += 200) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.h); ctx.stroke(); }
-    for (let y = 0; y <= WORLD.h; y += 200) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.w, y); ctx.stroke(); }
-    // center plaza
-    ctx.fillStyle = 'rgba(245,197,24,0.05)';
-    ctx.beginPath(); ctx.arc(WORLD.w / 2, WORLD.h / 2, 220, 0, TAU); ctx.fill();
-    ctx.strokeStyle = theme.accent; ctx.globalAlpha = 0.25;
-    ctx.beginPath(); ctx.arc(WORLD.w / 2, WORLD.h / 2, 220, 0, TAU); ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    // obstacles
-    for (const o of obstacles) {
-      if (o.wall) { ctx.fillStyle = '#05070c'; ctx.fillRect(o.x, o.y, o.w, o.h); continue; }
-      ctx.fillStyle = o.crate ? '#3a2f22' : '#232c3f';
-      ctx.fillRect(o.x, o.y, o.w, o.h);
-      ctx.strokeStyle = o.crate ? '#8a6d3b' : theme.accent;
-      ctx.globalAlpha = o.crate ? 1 : 0.35; ctx.lineWidth = 2;
-      ctx.strokeRect(o.x + 1, o.y + 1, o.w - 2, o.h - 2);
-      ctx.globalAlpha = 1;
-      if (o.crate) {
-        ctx.strokeStyle = 'rgba(0,0,0,.4)';
-        ctx.beginPath(); ctx.moveTo(o.x, o.y); ctx.lineTo(o.x + o.w, o.y + o.h); ctx.moveTo(o.x + o.w, o.y); ctx.lineTo(o.x, o.y + o.h); ctx.stroke();
-      } else if (!o.crates) {
-        // windows
-        ctx.fillStyle = 'rgba(255,220,120,0.12)';
-        for (let wy = o.y + 12; wy < o.y + o.h - 10; wy += 26)
-          for (let wx = o.x + 12; wx < o.x + o.w - 10; wx += 30)
-            if ((wx + wy) % 3 === 0) ctx.fillRect(wx, wy, 14, 10);
-      }
-      // shadow
-      ctx.fillStyle = 'rgba(0,0,0,.35)';
-      ctx.fillRect(o.x + 6, o.y + o.h, o.w, 8);
-    }
-
-    // pickups
-    for (const p of pickups) {
-      const bob = Math.sin(p.t * 4) * 4;
-      const blink = p.life < 4 ? (Math.sin(p.t * 14) > 0 ? 1 : 0.3) : 1;
-      ctx.globalAlpha = blink;
-      ctx.fillStyle = 'rgba(0,0,0,.5)';
-      ctx.beginPath(); ctx.ellipse(p.x, p.y + 14, 16, 6, 0, 0, TAU); ctx.fill();
-      const colors = { MEDKIT: '#37d67a', ARMOR: '#4aa8ff', AMMO: '#ffd166', GRENADE: '#ff9a3d', SMG: '#7cc4ff', RIFLE: '#9dff6e', SHOTGUN: '#ff9a3d' };
-      ctx.fillStyle = colors[p.kind] || '#fff';
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-      ctx.save(); ctx.translate(p.x, p.y + bob);
-      if (WEAPONS[p.kind]) { // gun crate
-        ctx.fillRect(-18, -12, 36, 24); ctx.strokeRect(-18, -12, 36, 24);
-        ctx.fillStyle = '#000'; ctx.font = 'bold 9px Inter'; ctx.textAlign = 'center';
-        ctx.fillText(p.kind, 0, 4);
+  if (state.day % 7 === 0) {
+    const home = PROPERTIES.find((p) => p.id === state.home);
+    if (home && home.rent) {
+      if (state.money >= home.rent) {
+        spend(home.rent, `Rent for ${home.name}`);
+      } else if (state.bank >= home.rent) {
+        state.bank -= home.rent;
+        emit('notify', { text: `Rent auto-paid from savings ($${home.rent}).`, kind: 'info' });
       } else {
-        ctx.beginPath(); ctx.arc(0, 0, 14, 0, TAU); ctx.fill(); ctx.stroke();
-        ctx.font = '15px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText({ MEDKIT: '✚', ARMOR: '🛡', AMMO: '📦', GRENADE: '💣' }[p.kind] || '?', 0, 1);
-      }
-      ctx.restore();
-      ctx.globalAlpha = 1;
-    }
-
-    // sniper lasers (under entities)
-    for (const e of enemies) {
-      if ((e.behavior === 'snipe' && e.windup > 0) || e.type === 'sniper') {
-        if (!lineOfSight(e, player)) continue;
-        ctx.strokeStyle = e.windup > 0 ? 'rgba(255,40,40,.85)' : 'rgba(255,40,40,.25)';
-        ctx.lineWidth = e.windup > 0 ? 2.5 : 1;
-        ctx.setLineDash([8, 6]);
-        ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(player.x, player.y); ctx.stroke();
-        ctx.setLineDash([]);
+        state.credit = Math.max(300, state.credit - 40);
+        emit('notify', { text: 'Missed rent. Credit took a hit.', kind: 'warn' });
       }
     }
-
-    // casings
-    for (const c of casings) {
-      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rot);
-      ctx.fillStyle = '#f5c518'; ctx.fillRect(-3, -1.5, 6, 3);
-      ctx.restore();
-    }
-
-    // enemies
-    for (const e of enemies) drawEnemy(e);
-
-    // player
-    if (!player.dead) drawPlayer();
-
-    // grenades
-    for (const g of grenades) {
-      const k = Math.min(1, g.t / g.dur);
-      const h = Math.sin(k * Math.PI) * 60; // fake height
-      ctx.fillStyle = 'rgba(0,0,0,.35)';
-      ctx.beginPath(); ctx.ellipse(g.x, g.y + 6, 8, 4, 0, 0, TAU); ctx.fill();
-      ctx.fillStyle = g.fuse < 0.3 ? (Math.sin(g.t * 40) > 0 ? '#ff2a2a' : '#333') : '#2bff62';
-      ctx.beginPath(); ctx.arc(g.x, g.y - h * 0.4, 8, 0, TAU); ctx.fill();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-    }
-
-    // bullets
-    for (const b of bullets) {
-      ctx.strokeStyle = b.color; ctx.lineWidth = 4; ctx.lineCap = 'round';
-      ctx.shadowColor = b.color; ctx.shadowBlur = 8;
-      ctx.beginPath(); ctx.moveTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012); ctx.lineTo(b.x, b.y); ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
-    for (const b of ebullets) {
-      ctx.fillStyle = b.color; ctx.shadowColor = b.color; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, TAU); ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-
-    // particles
-    for (const p of parts) {
-      const a = clamp(p.life / p.maxLife, 0, 1);
-      if (p.ring) {
-        ctx.globalAlpha = a;
-        ctx.strokeStyle = p.color; ctx.lineWidth = 6 * a + 1;
-        const r = lerp(p.r1, p.r0, a);
-        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, TAU); ctx.stroke();
-        ctx.globalAlpha = 1;
-        continue;
+    if (state.loan > 0) {
+      const due = Math.max(80, Math.round(state.loan * 0.04));
+      if (state.money + state.bank >= due) {
+        if (state.money >= due) spend(due, 'Loan payment');
+        else { state.bank -= (due - state.money); spend(state.money, 'Loan payment'); }
+        state.loan = Math.max(0, state.loan - due);
+        state.credit = Math.min(850, state.credit + 4);
+      } else {
+        state.credit = Math.max(300, state.credit - 25);
+        emit('notify', { text: 'Missed loan payment.', kind: 'warn' });
       }
-      ctx.globalAlpha = p.ghost ? a * 0.8 : a;
-      ctx.fillStyle = p.color;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (p.grow ? 1 : a) + 0.5, 0, TAU); ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-
-    // damage numbers
-    ctx.textAlign = 'center';
-    for (const d of dmgNums) {
-      ctx.globalAlpha = clamp(d.life / 0.9, 0, 1);
-      ctx.font = d.big ? 'bold 22px Inter' : 'bold 15px Inter';
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
-      ctx.strokeText(d.txt, d.x, d.y);
-      ctx.fillStyle = d.color; ctx.fillText(d.txt, d.x, d.y);
-      ctx.globalAlpha = 1;
     }
   }
-  ctx.restore();
+  emit('money', snapshot());
+  saveGame();
+}
 
-  // rain overlay (screen space)
-  if (state === 'play' && theme.rain) {
-    ctx.strokeStyle = 'rgba(150,200,255,.35)'; ctx.lineWidth = 1.5;
+function updateSky() {
+  const h = hour();
+  const elev = Math.sin(((h - 6) / 12) * Math.PI) * 58;
+  const elevation = (h >= 5.5 && h <= 19.5) ? elev : -28 - Math.abs(h - 12) * 0.4;
+  const azimuth = 180 - (h / 24) * 360;
+  const phi = THREE.MathUtils.degToRad(90 - elevation);
+  const theta = THREE.MathUtils.degToRad(azimuth);
+  sunPos.setFromSphericalCoords(1, phi, theta);
+  sky.material.uniforms['sunPosition'].value.copy(sunPos);
+  night01 = THREE.MathUtils.clamp(1 - Math.max(0, elevation / 50), 0, 1);
+  if (state.weather === 'fog') night01 = Math.min(1, night01 + 0.2);
+  const fogCol = night01 > 0.7 ? 0x0b1220 : state.weather === 'storm' ? 0x4a5564 : state.weather === 'rain' ? 0x6a7a88 : 0x87a8c8;
+  scene.fog.color.setHex(fogCol);
+  scene.background.setHex(fogCol);
+  scene.fog.density = state.mode === 'interior'
+    ? 0.0004
+    : state.weather === 'fog' ? 0.0045 : state.weather === 'storm' ? 0.0024 : 0.0015 + night01 * 0.001;
+  sky.material.uniforms['turbidity'].value = state.weather === 'storm' ? 12 : state.weather === 'rain' ? 8 : 5;
+  sunLight.intensity = Math.max(0.05, (1 - night01) * (state.weather === 'storm' ? 0.6 : 2.1));
+  sunLight.color.set(night01 > 0.6 ? 0xaabbff : 0xfff1d0);
+  hemi.intensity = 0.25 + (1 - night01) * 0.5;
+  const px = player ? player.x : 0, pz = player ? player.z : 0;
+  sunLight.position.set(px + sunPos.x * 60, Math.max(12, sunPos.y * 70), pz + sunPos.z * 60);
+  sunLight.target.position.set(px, 0, pz);
+  for (const m of world.windowMats) m.emissiveIntensity = night01 * 1.4;
+  if (world.bulbs) {
+    world.bulbs.material.emissiveIntensity = 0.2 + night01 * 1.8;
+  }
+  audio.setAmbient(1 - night01, player ? (Math.hypot(player.x, player.z - 40) < 120 ? 1 : 0) : 0);
+  audio.setRain(state.weather === 'storm' ? 1 : state.weather === 'rain' ? 0.65 : 0);
+}
+
+function updateWeather(dt) {
+  state.weatherTimer += dt;
+  if (state.weatherTimer > 90) {
+    state.weatherTimer = 0;
+    const roll = Math.random();
+    const next = roll < 0.55 ? 'sunny' : roll < 0.75 ? 'rain' : roll < 0.85 ? 'fog' : roll < 0.93 ? 'wind' : 'storm';
+    if (next !== state.weather) {
+      state.weather = next;
+      emit('notify', { text: weatherLine(next), kind: 'weather' });
+      emit('time', { time: state.time, day: state.day, weather: state.weather });
+      if (next === 'storm') { flash = 0.2; audio.thunder(); }
+    }
+  }
+  if (state.weather === 'storm' && Math.random() < dt * 0.08) {
+    flash = 0.12;
+    audio.thunder();
+  }
+}
+
+function weatherLine(w) {
+  return {
+    sunny: 'Skies clearing over New Aurora.',
+    rain: 'Rain moving in. Roads will be slick.',
+    storm: 'Storm warning. Harbor traffic slowing.',
+    fog: 'Fog rolling off the water. Drive easy.',
+    wind: 'Wind picking up between the towers.',
+  }[w] || w;
+}
+
+function updateRain(dt) {
+  const show = state.weather === 'rain' || state.weather === 'storm';
+  rain.visible = show && state.mode === 'play';
+  if (!show || !player) return;
+  rain.position.set(player.x, 0, player.z);
+  const pos = rainGeo.attributes.position.array;
+  const fast = state.weather === 'storm' ? 28 : 18;
+  for (let i = 0; i < pos.length; i += 3) {
+    pos[i + 1] -= dt * fast;
+    if (pos[i + 1] < 0) pos[i + 1] = 26;
+  }
+  rainGeo.attributes.position.needsUpdate = true;
+}
+
+function inputMove() {
+  const k = state.keys;
+  let x = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
+  let z = (k.KeyS || k.ArrowDown ? 1 : 0) - (k.KeyW || k.ArrowUp ? 1 : 0);
+  if (k._tx) x += k._tx;
+  if (k._ty) z += k._ty;
+  return { x, z, sprint: !!(k.ShiftLeft || k.ShiftRight), jump: !!k.Space };
+}
+
+function updatePlayer(dt) {
+  if (!player || state.dialogue) {
+    if (playerMesh) animateHuman(playerMesh, 0, dt, false);
+    return;
+  }
+  if (player.vehicle) return;
+  const inp = inputMove();
+  const wet = state.weather === 'rain' || state.weather === 'storm' ? 0.86 : 1;
+  let spd = (inp.sprint ? 9.5 : 5.4) * wet;
+  if (state.needs.energy < 15) spd *= 0.7;
+  if (state.needs.hunger < 10) spd *= 0.75;
+  const water = inWater(player.x, player.z, world.waterBoxes);
+  if (water && player.y <= 0.4 && !player.vehicle) {
+    spd *= 0.45;
+    player.y = 0.2;
+  }
+  _f.set(Math.sin(camYaw), 0, Math.cos(camYaw));
+  _r.set(_f.z, 0, -_f.x);
+  const mx = _r.x * inp.x + _f.x * inp.z;
+  const mz = _r.z * inp.x + _f.z * inp.z;
+  const mag = Math.hypot(mx, mz);
+  let nx = player.x, nz = player.z;
+  if (mag > 0.01) {
+    nx += (mx / mag) * spd * dt;
+    nz += (mz / mag) * spd * dt;
+    player.yaw = Math.atan2(mx, mz);
+    playerMesh.rotation.y = player.yaw;
+    audio.foot(inp.sprint);
+    if (!state.flags.outside && Math.hypot(nx + 186, nz - 36) > 16) {
+      state.flags.outside = true;
+    }
+  }
+  if (!collides(nx, player.z, world.colliders)) player.x = nx;
+  if (!collides(player.x, nz, world.colliders)) player.z = nz;
+  const bound = WORLD_SIZE / 2 - 4;
+  player.x = Math.max(-bound, Math.min(bound, player.x));
+  player.z = Math.max(-bound, Math.min(bound, player.z));
+
+  if (inp.jump && player.y <= 0.05 && !water) player.vy = 6.2;
+  player.vy -= 18 * dt;
+  player.y += player.vy * dt;
+  if (player.y < 0 && !water) { player.y = 0; player.vy = 0; }
+  if (water && player.y < 0.15) { player.y = 0.15; player.vy = 0; }
+
+  playerMesh.position.set(player.x, player.y, player.z);
+  animateHuman(playerMesh, mag > 0.01 ? (inp.sprint ? 1.6 : 1) : 0, dt, false);
+  playerMesh.visible = true;
+}
+
+function updateInteriorPlayer(dt) {
+  const inp = inputMove();
+  const spd = 4.2;
+  _f.set(Math.sin(camYaw), 0, Math.cos(camYaw));
+  _r.set(_f.z, 0, -_f.x);
+  const mx = _r.x * inp.x + _f.x * inp.z;
+  const mz = _r.z * inp.x + _f.z * inp.z;
+  const mag = Math.hypot(mx, mz);
+  if (mag > 0.01) {
+    player.x += (mx / mag) * spd * dt;
+    player.z += (mz / mag) * spd * dt;
+    player.x = Math.max(-7.2, Math.min(7.2, player.x));
+    player.z = Math.max(-5.2, Math.min(5.2, player.z));
+    player.yaw = Math.atan2(mx, mz);
+    playerMesh.rotation.y = player.yaw;
+  }
+  player.y = 0;
+  playerMesh.position.set(player.x, 0, player.z);
+  animateHuman(playerMesh, mag > 0.01 ? 0.9 : 0, dt, false);
+}
+
+function updateCamera() {
+  const target = player.vehicle ? player.vehicle.mesh.position : playerMesh.position;
+  const dist = player.vehicle ? (player.vehicle.def.fly ? 14 : 9) : camDist;
+  const ox = Math.sin(camYaw) * dist * Math.cos(camPitch);
+  const oy = Math.sin(camPitch) * dist + 1.4;
+  const oz = Math.cos(camYaw) * dist * Math.cos(camPitch);
+  camera.position.lerp(_p.set(target.x + ox, target.y + oy, target.z + oz), 0.12);
+  camera.lookAt(target.x, target.y + 1.3, target.z);
+}
+
+function updateNPCs(dt) {
+  const h = hour();
+  const raining = state.weather === 'rain' || state.weather === 'storm';
+  for (const n of npcs) {
+    if (n.talking) {
+      animateHuman(n.mesh, 0, dt, true);
+      const dx = player.x - n.mesh.position.x;
+      const dz = player.z - n.mesh.position.z;
+      n.mesh.rotation.y = Math.atan2(dx, dz);
+      continue;
+    }
+    if (h >= 22 || h < 6) n.target.copy(n.home);
+    else if (h >= 8 && h < 17) n.target.copy(raining ? n.work : n.work);
+    else if (h >= 17 && h < 20) n.target.copy(raining ? n.home : n.shop);
+    else n.target.copy(n.plaza);
+
+    const dx = n.target.x - n.mesh.position.x;
+    const dz = n.target.z - n.mesh.position.z;
+    const dist = Math.hypot(dx, dz);
+    let spd = n.speed * (raining ? 1.25 : 1);
+    if (dist < 1.4) {
+      animateHuman(n.mesh, 0, dt, false);
+      continue;
+    }
+    const vx = (dx / dist) * spd * dt;
+    const vz = (dz / dist) * spd * dt;
+    let nx = n.mesh.position.x + vx;
+    let nz = n.mesh.position.z + vz;
+    if (collides(nx, n.mesh.position.z, world.colliders, 0.4)) nx = n.mesh.position.x;
+    if (collides(n.mesh.position.x, nz, world.colliders, 0.4)) nz = n.mesh.position.z;
+    n.mesh.position.x = nx;
+    n.mesh.position.z = nz;
+    n.mesh.rotation.y = Math.atan2(dx, dz);
+    animateHuman(n.mesh, 1, dt, false);
+
+    const pd = player ? Math.hypot(player.x - nx, player.z - nz) : 99;
+    if (pd < 10) {
+      if (!n.label) {
+        n.label = makeLabelSprite(n.name, n.job);
+        n.mesh.add(n.label);
+      }
+      n.label.visible = true;
+    } else if (n.label) n.label.visible = false;
+  }
+}
+
+function updateVehicles(dt) {
+  if (player.vehicle) drive(player.vehicle, dt);
+  else audio.setEngine(0);
+  for (const v of vehicles) {
+    if (v.def.fly && v.mesh.userData.rotor) {
+      const spin = player.vehicle === v ? 18 : 0.4;
+      v.mesh.userData.rotor.forEach((r) => { r.rotation.y += dt * spin; });
+    }
+  }
+}
+
+function drive(v, dt) {
+  const inp = inputMove();
+  const def = v.def;
+  const wet = state.weather === 'rain' || state.weather === 'storm' ? 0.72 : 1;
+  const max = def.speed * wet * (v.fuel <= 0 ? 0 : 1);
+  const accel = inp.z < -0.1 ? 18 : inp.z > 0.1 ? -12 : 0;
+  v.speed += accel * dt;
+  v.speed *= 1 - dt * (inp.jump ? 3.5 : 1.6);
+  v.speed = Math.max(-max * 0.4, Math.min(max, v.speed));
+  const steer = inp.x * dt * (1.6 + Math.abs(v.speed) * 0.08) * Math.sign(v.speed || 1);
+  v.mesh.rotation.y -= steer;
+  const yaw = v.mesh.rotation.y;
+  const nx = v.mesh.position.x + Math.sin(yaw) * v.speed * dt;
+  const nz = v.mesh.position.z + Math.cos(yaw) * v.speed * dt;
+  const water = inWater(nx, nz, world.waterBoxes);
+  if (def.water) {
+    if (!water) { v.speed *= 0.2; }
+    v.mesh.position.x = nx;
+    v.mesh.position.z = nz;
+    v.mesh.position.y = 0.25 + Math.sin(performance.now() / 400) * 0.08;
+  } else if (def.fly) {
+    if (inp.sprint) v.mesh.position.y = Math.min(42, v.mesh.position.y + 8 * dt);
+    else v.mesh.position.y = Math.max(0, v.mesh.position.y - 5 * dt);
+    v.mesh.position.x = nx;
+    v.mesh.position.z = nz;
+  } else {
+    if (water && v.mesh.position.y < 1) {
+      v.hp -= 20 * dt;
+      v.speed *= 0.3;
+      emit('prompt', { text: 'You are in the water. Get back to shore.' });
+    }
+    if (!collides(nx, v.mesh.position.z, world.colliders, 1.1)) v.mesh.position.x = nx;
+    else { v.speed *= -0.2; v.hp -= 4; v.wear += 2; }
+    if (!collides(v.mesh.position.x, nz, world.colliders, 1.1)) v.mesh.position.z = nz;
+    else { v.speed *= -0.2; v.hp -= 4; v.wear += 2; }
+    v.mesh.position.y = 0;
+  }
+  if (v.mesh.userData.wheels) {
+    v.mesh.userData.wheels.forEach((w) => { w.rotation.x += v.speed * dt; });
+  }
+  if (v.mesh.userData.headlights) {
+    v.mesh.userData.headlights.forEach((h) => { h.material.emissiveIntensity = night01 * 2.2; });
+  }
+  v.fuel = Math.max(0, v.fuel - Math.abs(v.speed) * dt * 0.04);
+  player.x = v.mesh.position.x;
+  player.z = v.mesh.position.z;
+  player.y = v.mesh.position.y;
+  playerMesh.position.copy(v.mesh.position);
+  playerMesh.visible = false;
+  audio.setEngine(Math.abs(v.speed) / Math.max(1, def.speed));
+  if (v.hp <= 0) {
+    emit('notify', { text: 'Vehicle totaled. You crawl out.', kind: 'warn' });
+    exitVehicle();
+  }
+}
+
+function updateTraffic(dt) {
+  const slow = state.weather === 'rain' || state.weather === 'storm' ? 0.7 : 1;
+  for (const t of traffic) {
+    const dest = t.path[t.idx];
+    const dx = dest.x - t.mesh.position.x;
+    const dz = dest.z - t.mesh.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 2) t.idx = (t.idx + 1) % t.path.length;
+    else {
+      t.mesh.position.x += (dx / dist) * t.speed * slow * dt;
+      t.mesh.position.z += (dz / dist) * t.speed * slow * dt;
+      t.mesh.rotation.y = Math.atan2(dx, dz);
+    }
+    if (t.mesh.userData.wheels) t.mesh.userData.wheels.forEach((w) => { w.rotation.x += dt * 6; });
+    if (t.mesh.userData.headlights) t.mesh.userData.headlights.forEach((h) => { h.material.emissiveIntensity = night01 * 2; });
+  }
+}
+
+function updateNeeds(dt) {
+  const gm = (dt * 1000) / MINUTE_MS;
+  const energyMul = state.trait === 'early' ? 0.7 : 1;
+  state.needs.hunger = clamp(state.needs.hunger - gm * 0.07);
+  state.needs.energy = clamp(state.needs.energy - gm * 0.045 * energyMul);
+  state.needs.fun = clamp(state.needs.fun - gm * 0.035);
+  state.needs.social = clamp(state.needs.social - gm * 0.03);
+  state.needs.hygiene = clamp(state.needs.hygiene - gm * 0.028);
+  if (state.needs.hunger < 5) state.needs.energy = clamp(state.needs.energy - gm * 0.08);
+}
+
+function clamp(v) { return Math.max(0, Math.min(100, v)); }
+
+function updateLooking() {
+  if (!player || state.mode === 'menu') return;
+  let best = null, bestD = 3.2;
+  if (state.mode === 'interior' && interiorGroup) {
+    for (const it of interiorGroup.userData.interact) {
+      const d = Math.hypot(player.x - it.x, player.z - it.z);
+      if (d < 1.8 && d < bestD) { bestD = d; best = { kind: 'interior', ...it }; }
+    }
+    const ex = interiorGroup.userData.exit;
+    const d = Math.hypot(player.x - ex.x, player.z - ex.z);
+    if (d < 1.8) best = { kind: 'interior', id: 'exit', label: 'Exit' };
+    state.looking = best;
+    const t = best ? `[E]  ${best.label}` : '';
+    if (t !== lastPrompt) { lastPrompt = t; emit('prompt', { text: t }); }
+    return;
+  }
+  for (const n of npcs) {
+    const d = Math.hypot(player.x - n.mesh.position.x, player.z - n.mesh.position.z);
+    if (d < bestD) { bestD = d; best = { kind: 'npc', npc: n, label: `Talk to ${n.name}` }; }
+  }
+  for (const d of world.doors) {
+    const dist = Math.hypot(player.x - d.x, player.z - d.z);
+    if (dist < bestD) { bestD = dist; best = { kind: 'door', door: d, label: `Enter ${d.landmark.name}` }; }
+  }
+  for (const v of vehicles) {
+    if (player.vehicle) continue;
+    const dist = Math.hypot(player.x - v.mesh.position.x, player.z - v.mesh.position.z);
+    if (dist < 2.8 && dist < bestD) {
+      const lab = v.owned ? `Drive ${v.def.name}` : `Inspect ${v.def.name} ($${v.def.price.toLocaleString()})`;
+      bestD = dist; best = { kind: 'car', car: v, label: lab };
+    }
+  }
+  for (const p of world.farmPlots) {
+    const dist = Math.hypot(player.x - p.x, player.z - p.z);
+    if (dist < 4 && dist < bestD) { bestD = dist; best = { kind: 'farm', plot: p, label: 'Harvest crops' }; }
+  }
+  if (state.delivery) {
+    const dist = Math.hypot(player.x - state.delivery.x, player.z - state.delivery.z);
+    if (dist < 4) best = { kind: 'drop', label: `Deliver package to ${state.delivery.name}` };
+  }
+  state.looking = best;
+  const text = best ? `[E]  ${best.label}` : (player.vehicle ? '[F] Exit vehicle   [H] Horn' : '');
+  if (text !== lastPrompt) {
+    lastPrompt = text;
+    emit('prompt', { text });
+  }
+}
+
+export function interact() {
+  if (state.mode !== 'play' && state.mode !== 'interior') return;
+  if (state.dialogue) return;
+  const b = state.looking;
+  if (!b) return;
+  audio.click();
+  if (b.kind === 'npc') openDialogue(b.npc);
+  else if (b.kind === 'door') enterBuilding(b.door);
+  else if (b.kind === 'car') {
+    if (b.car.owned) enterVehicle(b.car);
+    else emit('shop-open', { kind: 'vehicle', car: b.car });
+  } else if (b.kind === 'farm') harvest();
+  else if (b.kind === 'drop') completeDelivery();
+  else if (b.kind === 'interior') interiorAction(b.id);
+}
+
+function interiorAction(id) {
+  if (id === 'exit') { exitInterior(); return; }
+  if (id === 'bed') sleepNow();
+  else if (id === 'fridge') fridgeEat();
+  else if (id === 'shower') showerNow();
+  else if (id === 'tv') watchTV();
+  else if (id === 'wardrobe') cycleClothes();
+  else if (id === 'counter' || id === 'shelf' || id === 'shelf2' || id === 'checkout') emit('shop-open', { kind: 'shop' });
+  else if (id === 'dine' || id === 'table' || id === 'table2') emit('shop-open', { kind: 'food' });
+  else if (id === 'seat' || id === 'seat2') { addNeed('energy', 8); addNeed('fun', 6); skipMinutes(25); emit('notify', { text: 'You rest with a warm cup.', kind: 'info' }); }
+  else if (id === 'desk' || id === 'desk2' || id === 'station' || id === 'board') startWork();
+  else if (id === 'teller') emit('open-app', { app: 'bank' });
+  else if (id === 'dance' || id === 'bar') dance();
+  else if (id === 'crates') startDelivery();
+}
+
+function enterBuilding(door) {
+  const lm = door.landmark;
+  state.flags['visit_' + lm.id] = true;
+  if (lm.type === 'bank') { emit('open-app', { app: 'bank' }); return; }
+  if (!lm.interior) {
+    if (lm.type === 'hospital') {
+      if (spend(40, 'Clinic visit')) { addNeed('energy', 35); addNeed('hygiene', 10); emit('notify', { text: 'The nurse patches you up.', kind: 'info' }); }
+      return;
+    }
+    if (lm.park || lm.plaza) { addNeed('fun', 8); addNeed('social', 4); emit('notify', { text: 'You take a breath. The city exhales with you.', kind: 'info' }); return; }
+    if (lm.type === 'airport') { emit('notify', { text: 'Arrivals, departures, lives in motion.', kind: 'info' }); return; }
+    if (lm.type === 'civic') { emit('open-app', { app: 'biz' }); return; }
+    emit('notify', { text: `You linger at ${lm.name}.`, kind: 'info' });
+    return;
+  }
+  audio.door();
+  world.group.visible = false;
+  npcs.forEach((n) => { n.mesh.visible = false; });
+  traffic.forEach((t) => { t.mesh.visible = false; });
+  vehicles.forEach((v) => { v.mesh.visible = false; });
+  if (interiorGroup) scene.remove(interiorGroup);
+  interiorGroup = createInterior(lm.interior);
+  scene.add(interiorGroup);
+  state.interior = { landmark: lm, x: player.x, z: player.z };
+  player.x = 0; player.z = 0; player.y = 0;
+  playerMesh.position.set(0, 0, 0);
+  playerMesh.visible = true;
+  state.mode = 'interior';
+  camDist = 6;
+  scene.fog.density = 0.0001;
+  emit('notify', { text: lm.name, kind: 'info' });
+}
+
+function exitInterior() {
+  audio.door();
+  if (interiorGroup) scene.remove(interiorGroup);
+  interiorGroup = null;
+  world.group.visible = true;
+  npcs.forEach((n) => { n.mesh.visible = true; });
+  traffic.forEach((t) => { t.mesh.visible = true; });
+  vehicles.forEach((v) => { v.mesh.visible = true; });
+  player.x = state.interior.x;
+  player.z = state.interior.z + 2;
+  player.y = 0;
+  playerMesh.position.set(player.x, 0, player.z);
+  state.interior = null;
+  state.mode = 'play';
+  camDist = 7.2;
+}
+
+function tryVehicle() {
+  if (state.mode !== 'play') return;
+  if (player.vehicle) { exitVehicle(); return; }
+  if (state.looking?.kind === 'car' && state.looking.car.owned) enterVehicle(state.looking.car);
+}
+
+function enterVehicle(v) {
+  if (v.fuel <= 0) { emit('notify', { text: 'Empty tank. Buy a fuel can.', kind: 'warn' }); return; }
+  player.vehicle = v;
+  playerMesh.visible = false;
+  v.parked = false;
+  audio.setEngine(0.2);
+  emit('notify', { text: `Driving the ${v.def.name}.`, kind: 'info' });
+  state.flags.drove = true;
+}
+
+function exitVehicle() {
+  if (!player.vehicle) return;
+  const v = player.vehicle;
+  player.x = v.mesh.position.x + 2;
+  player.z = v.mesh.position.z;
+  player.y = 0;
+  player.vehicle = null;
+  playerMesh.visible = true;
+  playerMesh.position.set(player.x, 0, player.z);
+  audio.setEngine(0);
+}
+
+function openDialogue(npc) {
+  talkTarget = npc;
+  npc.talking = true;
+  state.talks += 1;
+  const rel = getRel(npc.id);
+  if (!state.relationships[npc.id]) state.relationships[npc.id] = { rel: 8, met: true, name: npc.name, job: npc.job };
+  const lines = DIALOGUE.greeting[npc.personality] || DIALOGUE.greeting.warm;
+  const extra = DIALOGUE.weather[state.weather] || [];
+  const line = Math.random() < 0.35 && extra.length ? rand(extra) : rand(lines);
+  state.dialogue = {
+    npc,
+    text: line,
+    options: [
+      { id: 'chat', label: 'Chat' },
+      { id: 'ask', label: 'Ask about the city' },
+      { id: 'gift', label: 'Give a gift' },
+      { id: 'bye', label: 'Goodbye' },
+    ],
+  };
+  addNeed('social', 6);
+  audio.talk();
+  emit('dialogue', state.dialogue);
+}
+
+export function chooseDialogue(id) {
+  const npc = talkTarget;
+  if (!npc) return;
+  if (id === 'bye') { closeDialogue(); return; }
+  if (id === 'chat') {
+    const lines = DIALOGUE.chat[npc.personality] || DIALOGUE.chat.warm;
+    bumpRel(npc.id, state.trait === 'charm' ? 8 : 5);
+    addNeed('social', 8);
+    addNeed('fun', 3);
+    state.dialogue.text = rand(lines);
+    emit('dialogue', state.dialogue);
+    return;
+  }
+  if (id === 'ask') {
+    const tips = [
+      'Apex Motors is east of the plaza if you want wheels.',
+      'Harbor Logistics always needs extra hands for deliveries.',
+      'Greenfield Farm buys labor at dawn. Brutal hours, honest pay.',
+      'First National will float you a loan if your credit is not a dumpster fire.',
+      'Afterlight opens after 21:00. Good for the soul. Bad for the alarm clock.',
+      'The penthouse at the Grand Hotel is a statement. Mostly “I made it.”',
+    ];
+    state.dialogue.text = rand(tips);
+    bumpRel(npc.id, 3);
+    emit('dialogue', state.dialogue);
+    return;
+  }
+  if (id === 'gift') {
+    const gift = state.inventory.find((i) => i.id === 'flowers' || i.id === 'watch');
+    if (!gift) {
+      state.dialogue.text = 'You pat your pockets. Nothing gift-worthy.';
+      emit('dialogue', state.dialogue);
+      return;
+    }
+    gift.n -= 1;
+    if (gift.n <= 0) state.inventory = state.inventory.filter((i) => i.n > 0);
+    const item = SHOP_ITEMS.find((s) => s.id === gift.id);
+    bumpRel(npc.id, item?.rel || 10);
+    addNeed('social', 12);
+    state.dialogue.text = npc.personality === 'sarcastic' ? 'Okay. That is… actually sweet. Do not make it a thing.' : 'You should not have. Thank you.';
+    emit('dialogue', state.dialogue);
+  }
+}
+
+export function closeDialogue() {
+  if (talkTarget) talkTarget.talking = false;
+  talkTarget = null;
+  state.dialogue = null;
+  emit('dialogue', null);
+}
+
+function getRel(id) { return state.relationships[id]?.rel || 0; }
+function bumpRel(id, n) {
+  if (!state.relationships[id]) state.relationships[id] = { rel: 0, met: true };
+  state.relationships[id].rel = Math.min(100, (state.relationships[id].rel || 0) + n);
+  if (state.relationships[id].rel >= 50) state.flags.friend = true;
+}
+
+function addNeed(k, n) { state.needs[k] = clamp(state.needs[k] + n); emit('needs', { ...state.needs }); }
+
+function skipMinutes(m) {
+  state.time += m;
+  while (state.time >= 24 * 60) { state.time -= 24 * 60; state.day += 1; onNewDay(); }
+  emit('time', { time: state.time, day: state.day, weather: state.weather });
+}
+
+export function sleepNow() {
+  if (state.needs.energy > 85) { emit('notify', { text: 'You are not tired yet.', kind: 'info' }); return; }
+  const h = hour();
+  const add = h < 7 ? (7 * 60 - state.time) : (24 * 60 - state.time + 7 * 60);
+  skipMinutes(add);
+  addNeed('energy', 80);
+  addNeed('hunger', -18);
+  addNeed('hygiene', -8);
+  emit('notify', { text: 'You sleep. Morning finds you anyway.', kind: 'info' });
+  state.flags.slept = true;
+}
+
+export function showerNow() {
+  addNeed('hygiene', 55);
+  addNeed('fun', 4);
+  skipMinutes(15);
+  emit('notify', { text: 'Hot water. New person.', kind: 'info' });
+}
+
+export function fridgeEat() {
+  const g = state.inventory.find((i) => i.id === 'groceries' || i.id === 'sandwich');
+  const mul = state.trait === 'chef' ? 1.35 : 1;
+  if (g) {
+    g.n -= 1;
+    if (g.n <= 0) state.inventory = state.inventory.filter((i) => i.n > 0);
+    addNeed('hunger', 48 * mul);
+    state.flags.ate = true;
+    emit('notify', { text: 'Leftovers. Gourmet enough.', kind: 'info' });
+  } else {
+    addNeed('hunger', 12 * mul);
+    emit('notify', { text: 'The fridge contains a sad condiment and hope.', kind: 'info' });
+  }
+}
+
+export function watchTV() {
+  addNeed('fun', 22);
+  addNeed('energy', -6);
+  skipMinutes(40);
+  emit('notify', { text: 'A show about people with nicer apartments.', kind: 'info' });
+}
+
+function cycleClothes() {
+  const colors = ['#f0f0f0', '#1e3a5f', '#c45c26', '#2d6a4f', '#7b2d8e', '#111111', '#c9a227'];
+  const cur = state.appearance.shirt;
+  const i = (colors.indexOf(cur) + 1) % colors.length;
+  state.appearance.shirt = colors[i];
+  if (playerMesh) {
+    scene.remove(playerMesh);
+    playerMesh = createHuman(state.appearance);
+    playerMesh.position.set(player.x, player.y, player.z);
+    scene.add(playerMesh);
+  }
+  addNeed('fun', 6);
+  emit('notify', { text: 'New shirt. Same bills.', kind: 'info' });
+}
+
+export function dance() {
+  addNeed('fun', 28);
+  addNeed('energy', -12);
+  addNeed('social', 10);
+  skipMinutes(50);
+  if (spend(12, 'Night out')) emit('notify', { text: 'Bass in your ribs. The city blurs.', kind: 'info' });
+}
+
+function harvest() {
+  const owned = state.businesses.some((b) => b.id === 'farm_biz') || state.job === 'farmer';
+  const pay = owned ? 90 + Math.floor(Math.random() * 80) : 28 + Math.floor(Math.random() * 20);
+  state.money += pay;
+  addNeed('energy', -14);
+  addNeed('hunger', -8);
+  skipMinutes(50);
+  emit('notify', { text: `Harvested crates. +$${pay}.`, kind: 'cash' });
+  emit('money', snapshot());
+  audio.cash();
+  state.flags.farmed = true;
+}
+
+export function applyJob(jobId) {
+  const job = JOBS.find((j) => j.id === jobId);
+  if (!job) return false;
+  if (state.level < job.reqLevel) {
+    emit('notify', { text: `Need Life Level ${job.reqLevel}.`, kind: 'warn' });
+    audio.error();
+    return false;
+  }
+  state.job = jobId;
+  emit('notify', { text: `Hired: ${job.name} at ${job.employer}.`, kind: 'info' });
+  saveGame();
+  return true;
+}
+
+export function quitJob() {
+  state.job = null;
+  emit('notify', { text: 'You quit. The inbox will survive.', kind: 'info' });
+}
+
+export function startWork() {
+  if (!state.job) { emit('notify', { text: 'You do not work here. Apply on your phone.', kind: 'warn' }); return; }
+  const job = JOBS.find((j) => j.id === state.job);
+  const workLm = LANDMARKS.find((l) => l.id === job.location);
+  const here = state.interior?.landmark?.id === job.location
+    || (workLm && player && Math.hypot(player.x - workLm.x, player.z - workLm.z) < 22);
+  if (!here) {
+    emit('notify', { text: `Go to ${workLm?.name || 'work'} to clock in.`, kind: 'warn' });
+    return;
+  }
+  const h = hour();
+  const overnight = job.hours[0] > job.hours[1];
+  const open = overnight ? (h >= job.hours[0] || h < job.hours[1]) : (h >= job.hours[0] && h < job.hours[1]);
+  if (!open) {
+    emit('notify', { text: `${job.employer} is closed. Hours ${fmtHour(job.hours[0])}–${fmtHour(job.hours[1])}.`, kind: 'warn' });
+    return;
+  }
+  if (state.needs.energy < 12) { emit('notify', { text: 'You can barely stand. Sleep first.', kind: 'warn' }); return; }
+  const hours = 4;
+  skipMinutes(hours * 60);
+  const bonus = state.trait === 'hustler' ? 1.18 : 1;
+  const levelB = 1 + (state.level - 1) * 0.06;
+  let pay = Math.round(job.wage * hours * bonus * levelB);
+  if (job.tips) pay += Math.round(15 + Math.random() * 40);
+  state.money += pay;
+  addNeed('energy', -job.energy);
+  addNeed('hunger', -16);
+  addNeed('fun', -8);
+  addNeed('hygiene', -10);
+  addXP(18);
+  state.flags.worked = true;
+  emit('notify', { text: `Shift done. +$${pay}.`, kind: 'cash' });
+  emit('money', snapshot());
+  audio.cash();
+  saveGame();
+}
+
+function fmtHour(h) {
+  const ap = h >= 12 ? 'PM' : 'AM';
+  const hr = ((h + 11) % 12) + 1;
+  return hr + ap;
+}
+
+export function startDelivery() {
+  if (state.delivery) { emit('notify', { text: 'Finish the current drop first.', kind: 'warn' }); return; }
+  const dest = rand(LANDMARKS.filter((l) => l.type !== 'farm' && !l.park));
+  state.delivery = { x: dest.x, z: dest.z, name: dest.name, pay: 40 + Math.floor(Math.random() * 55) };
+  emit('notify', { text: `Package for ${dest.name}. Gold marker.`, kind: 'story' });
+  emit('mission-side', { text: `Deliver to ${dest.name}` });
+}
+
+function completeDelivery() {
+  if (!state.delivery) return;
+  state.money += state.delivery.pay;
+  state.deliveries += 1;
+  addXP(10);
+  addNeed('energy', -8);
+  emit('notify', { text: `Delivered. +$${state.delivery.pay}.`, kind: 'cash' });
+  state.delivery = null;
+  emit('money', snapshot());
+  audio.cash();
+}
+
+export function deposit(n) {
+  n = Math.floor(n);
+  if (n <= 0 || n > state.money) { audio.error(); return false; }
+  state.money -= n; state.bank += n;
+  emit('money', snapshot()); saveGame(); audio.cash(); return true;
+}
+export function withdraw(n) {
+  n = Math.floor(n);
+  if (n <= 0 || n > state.bank) { audio.error(); return false; }
+  state.bank -= n; state.money += n;
+  emit('money', snapshot()); saveGame(); audio.cash(); return true;
+}
+export function takeLoan(n) {
+  n = Math.floor(n);
+  const max = state.credit * 80;
+  if (n <= 0 || n > max) { emit('notify', { text: `Max loan $${max.toLocaleString()}.`, kind: 'warn' }); return false; }
+  state.loan += n; state.money += n;
+  emit('notify', { text: `Loan approved: $${n.toLocaleString()}.`, kind: 'cash' });
+  emit('money', snapshot()); saveGame(); return true;
+}
+export function repayLoan(n) {
+  n = Math.min(Math.floor(n), state.loan, state.money);
+  if (n <= 0) return false;
+  state.money -= n; state.loan -= n;
+  state.credit = Math.min(850, state.credit + Math.floor(n / 500));
+  emit('money', snapshot()); saveGame(); return true;
+}
+
+export function buyProperty(id) {
+  const p = PROPERTIES.find((x) => x.id === id);
+  if (!p) return false;
+  if (state.properties.includes(id)) { state.home = id; emit('notify', { text: `${p.name} is now your home.`, kind: 'info' }); return true; }
+  if (p.type === 'rent') {
+    if (!spend(p.rent, 'First week rent')) return false;
+    state.properties.push(id); state.home = id; state.flags.home = true;
+    emit('notify', { text: `Rented ${p.name}.`, kind: 'info' });
+    saveGame(); return true;
+  }
+  if (!spend(p.price, p.name)) return false;
+  state.properties.push(id); state.home = id; state.flags.home = true;
+  emit('notify', { text: `You own ${p.name}.`, kind: 'cash' });
+  addXP(30); saveGame(); return true;
+}
+
+export function buyBusiness(id) {
+  const b = BUSINESSES.find((x) => x.id === id);
+  if (!b) return false;
+  if (state.businesses.some((x) => x.id === id)) { emit('notify', { text: 'Already yours.', kind: 'info' }); return false; }
+  if (!spend(b.price, b.name)) return false;
+  state.businesses.push({ id, level: 0 });
+  state.flags.biz = true;
+  emit('notify', { text: `You bought ${b.name}. Income lands at midnight.`, kind: 'cash' });
+  addXP(40); saveGame(); return true;
+}
+
+export function collectBiz() {
+  if (state.bizBank <= 0) { emit('notify', { text: 'No business income waiting.', kind: 'info' }); return; }
+  state.money += state.bizBank;
+  emit('notify', { text: `Transferred $${state.bizBank} from business account.`, kind: 'cash' });
+  state.bizBank = 0;
+  emit('money', snapshot()); saveGame(); audio.cash();
+}
+
+export function upgradeBusiness(id) {
+  const owned = state.businesses.find((x) => x.id === id);
+  const def = BUSINESSES.find((x) => x.id === id);
+  if (!owned || !def) return false;
+  if (!spend(def.upgrade, 'Upgrade')) return false;
+  owned.level += 1;
+  emit('notify', { text: `${def.name} upgraded to level ${owned.level}.`, kind: 'info' });
+  saveGame(); return true;
+}
+
+export function buyVehicle(defId) {
+  const def = VEHICLES.find((v) => v.id === defId);
+  if (!def) return false;
+  if (state.ownedVehicles.includes(defId)) { emit('notify', { text: 'Already in your garage.', kind: 'info' }); return false; }
+  if (!spend(def.price, def.name)) return false;
+  state.ownedVehicles.push(defId);
+  const v = vehicles.find((c) => c.def.id === defId);
+  if (v) v.owned = true;
+  state.flags.car = true;
+  emit('notify', { text: `${def.name} is yours. Press F to drive.`, kind: 'cash' });
+  addXP(25); saveGame(); return true;
+}
+
+export function buyItem(id) {
+  const item = SHOP_ITEMS.find((s) => s.id === id);
+  if (!item) return false;
+  if (!spend(item.price, item.name)) return false;
+  if (item.type === 'food' && !item.home) {
+    const mul = state.trait === 'chef' ? 1.35 : 1;
+    addNeed('hunger', (item.hunger || 0) * mul);
+    addNeed('energy', item.energy || 0);
+    addNeed('fun', item.fun || 0);
+    addNeed('social', item.social || 0);
+    state.flags.ate = true;
+    emit('notify', { text: `You have ${item.name}.`, kind: 'info' });
+  } else if (item.type === 'fuel') {
+    const v = player.vehicle || vehicles.find((c) => c.owned);
+    if (v) { v.fuel = Math.min(v.def.fuel, v.fuel + 30); emit('notify', { text: 'Tank topped up.', kind: 'info' }); }
+  } else if (item.type === 'repair') {
+    const v = player.vehicle || vehicles.find((c) => c.owned);
+    if (v) { v.hp = Math.min(100, v.hp + 40); v.wear = Math.max(0, v.wear - 15); emit('notify', { text: 'Vehicle patched.', kind: 'info' }); }
+  } else if (item.type === 'hygiene') {
+    addNeed('hygiene', item.hygiene || 20);
+  } else if (item.type === 'clothes') {
+    addNeed('fun', item.fun || 8);
+    cycleClothes();
+  } else {
+    const existing = state.inventory.find((i) => i.id === id);
+    if (existing) existing.n += 1;
+    else state.inventory.push({ id, n: 1 });
+    emit('notify', { text: `Bought ${item.name}.`, kind: 'info' });
+  }
+  emit('money', snapshot());
+  saveGame();
+  return true;
+}
+
+export function useItem(id) {
+  const it = state.inventory.find((i) => i.id === id);
+  if (!it) return;
+  const item = SHOP_ITEMS.find((s) => s.id === id);
+  if (!item) return;
+  it.n -= 1;
+  if (it.n <= 0) state.inventory = state.inventory.filter((i) => i.n > 0);
+  if (item.type === 'food') {
+    const mul = state.trait === 'chef' ? 1.35 : 1;
+    addNeed('hunger', (item.hunger || 20) * mul);
+    addNeed('energy', item.energy || 0);
+    state.flags.ate = true;
+  } else if (item.type === 'fuel') {
+    const v = player.vehicle || vehicles.find((c) => c.owned);
+    if (v) v.fuel = Math.min(v.def.fuel, v.fuel + 30);
+  }
+  emit('notify', { text: `Used ${item.name}.`, kind: 'info' });
+}
+
+function spend(n, why) {
+  if (state.money < n) {
+    emit('notify', { text: `Need $${n.toLocaleString()} for ${why}.`, kind: 'warn' });
+    audio.error();
+    return false;
+  }
+  state.money -= n;
+  emit('money', snapshot());
+  audio.cash();
+  return true;
+}
+
+function addXP(n) {
+  state.xp += n;
+  const need = state.level * 100;
+  if (state.xp >= need) {
+    state.xp -= need;
+    state.level += 1;
+    emit('notify', { text: `Life Level ${state.level}. New jobs unlocking.`, kind: 'story' });
+  }
+}
+
+export function snapshot() {
+  const assets = state.properties.reduce((a, id) => a + (PROPERTIES.find((p) => p.id === id)?.price || 0), 0)
+    + state.ownedVehicles.reduce((a, id) => a + (VEHICLES.find((v) => v.id === id)?.price || 0), 0)
+    + state.businesses.reduce((a, b) => a + (BUSINESSES.find((x) => x.id === b.id)?.price || 0), 0);
+  const net = state.money + state.bank + state.bizBank + assets - state.loan;
+  if (net >= 50000) state.flags.rich = true;
+  return {
+    money: state.money, bank: state.bank, bizBank: state.bizBank, credit: state.credit, loan: state.loan, net, level: state.level, xp: state.xp,
+  };
+}
+
+function updateMissions() {
+  const i = state.story;
+  if (i >= STORY.length) return;
+  const checks = [
+    () => state.flags.outside,
+    () => state.flags.worked,
+    () => state.flags.ate,
+    () => state.talks >= 3,
+    () => state.flags.car,
+    () => state.flags.home && state.home !== 'studio',
+    () => state.deliveries >= 3,
+    () => state.flags.biz,
+    () => state.flags.friend,
+    () => snapshot().net >= 50000,
+  ];
+  if (checks[i] && checks[i]()) completeStory(i);
+}
+
+function completeStory(i) {
+  if (state.storyDone.includes(i)) return;
+  state.storyDone.push(i);
+  const m = STORY[i];
+  state.money += m.reward.cash;
+  addXP(m.reward.xp);
+  emit('notify', { text: `Mission complete — ${m.title}. +$${m.reward.cash}`, kind: 'story' });
+  audio.start();
+  state.story = i + 1;
+  emit('money', snapshot());
+  emit('mission', { mission: STORY[state.story] || null, complete: m });
+  saveGame();
+}
+
+function updateMarker() {
+  if (!marker) return;
+  if (state.delivery) {
+    marker.visible = true;
+    marker.position.set(state.delivery.x, 3.2 + Math.sin(performance.now() / 300) * 0.3, state.delivery.z);
+    marker.rotation.y += 0.03;
+    return;
+  }
+  const m = STORY[state.story];
+  const map = {
+    0: LANDMARKS.find((l) => l.id === 'home_studio'),
+    1: jobLandmark(),
+    2: LANDMARKS.find((l) => l.id === 'cafe_corner'),
+    3: LANDMARKS.find((l) => l.id === 'plaza'),
+    4: LANDMARKS.find((l) => l.id === 'dealership'),
+    5: LANDMARKS.find((l) => l.id === 'oakwood_house'),
+    6: LANDMARKS.find((l) => l.id === 'warehouse'),
+    7: LANDMARKS.find((l) => l.id === 'fish_market'),
+    8: LANDMARKS.find((l) => l.id === 'plaza'),
+    9: LANDMARKS.find((l) => l.id === 'bank'),
+  };
+  const lm = map[state.story];
+  if (!lm || !m) { marker.visible = false; return; }
+  marker.visible = state.mode === 'play';
+  marker.position.set(lm.x, (lm.h || 8) + 3 + Math.sin(performance.now() / 350) * 0.35, lm.z);
+  marker.rotation.y += 0.02;
+}
+
+function jobLandmark() {
+  if (!state.job) return LANDMARKS.find((l) => l.id === 'cafe_corner');
+  const j = JOBS.find((x) => x.id === state.job);
+  return LANDMARKS.find((l) => l.id === j?.location) || LANDMARKS[0];
+}
+
+export function drawMinimap(ctx, w, h) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#0b1220';
+  ctx.fillRect(0, 0, w, h);
+  const s = w / WORLD_SIZE;
+  const toX = (x) => (x + WORLD_SIZE / 2) * s;
+  const toY = (z) => (z + WORLD_SIZE / 2) * s;
+  ctx.fillStyle = '#2f6a38';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#5a6168';
+  ctx.fillRect(toX(-120), toY(-70), 250 * s, 210 * s);
+  ctx.fillStyle = '#1a4a62';
+  ctx.fillRect(toX(-310), toY(130), 200 * s, 160 * s);
+  ctx.fillStyle = '#3a3d44';
+  ctx.fillRect(toX(-6), toY(-260), 12 * s, 560 * s);
+  ctx.fillRect(toX(-290), toY(34), 580 * s, 12 * s);
+  for (const d of DISTRICTS) {
+    /* labels skipped at this scale */
+  }
+  ctx.fillStyle = '#c9b48a';
+  for (const lm of LANDMARKS) {
+    ctx.fillRect(toX(lm.x) - 1.5, toY(lm.z) - 1.5, 3, 3);
+  }
+  ctx.fillStyle = '#7ad0ff';
+  for (const n of npcs) ctx.fillRect(toX(n.mesh.position.x), toY(n.mesh.position.z), 1.5, 1.5);
+  if (player) {
+    ctx.fillStyle = '#f0c75e';
     ctx.beginPath();
-    for (const r of rain) { ctx.moveTo(r.x, r.y); ctx.lineTo(r.x - 6, r.y + 22); }
+    ctx.arc(toX(player.x), toY(player.z), 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f0c75e';
+    ctx.beginPath();
+    ctx.moveTo(toX(player.x), toY(player.z));
+    ctx.lineTo(toX(player.x + Math.sin(player.yaw) * 14), toY(player.z + Math.cos(player.yaw) * 14));
     ctx.stroke();
   }
-  // night tint
-  if (state === 'play' && theme.night) {
-    ctx.fillStyle = `rgba(5,8,20,${theme.night * 0.5})`;
-    ctx.fillRect(0, 0, W, H);
-  }
-  // low-hp heartbeat tint
-  if (state === 'play' && player.hp < 30 && !player.dead) {
-    ctx.fillStyle = `rgba(180,0,0,${0.08 + Math.sin(runTime * 6) * 0.05})`;
-    ctx.fillRect(0, 0, W, H);
-  }
-  // reload arc
-  if (state === 'play' && player.reloadT > 0 && !player.dead) {
-    const sx = player.x - camera.x, sy = player.y - camera.y;
-    ctx.strokeStyle = '#f5c518'; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(sx, sy, 26, -Math.PI / 2, -Math.PI / 2 + (1 - player.reloadT) * 4); ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Inter'; ctx.textAlign = 'center';
-    ctx.fillText('RELOADING', sx, sy - 32);
+  if (state.delivery) {
+    ctx.fillStyle = '#ff6b4a';
+    ctx.fillRect(toX(state.delivery.x) - 2, toY(state.delivery.z) - 2, 4, 4);
   }
 }
 
-function drawPlayer() {
-  const p = player;
-  if (p.iframes > 0 && Math.sin(runTime * 40) > 0 && p.dashT <= 0) ctx.globalAlpha = 0.45;
-  // shadow
-  ctx.fillStyle = 'rgba(0,0,0,.4)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 14, 14, 6, 0, 0, TAU); ctx.fill();
-  // dash trail
-  if (p.dashT > 0) {
-    ctx.strokeStyle = 'rgba(124,196,255,.7)'; ctx.lineWidth = 20; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(p.x - p.dashDx * 60, p.y - p.dashDy * 60); ctx.lineTo(p.x, p.y); ctx.stroke();
-  }
-  // body — hero blue shirt
-  ctx.fillStyle = '#a8d4f0';
-  ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
-  ctx.strokeStyle = slowmoActive ? '#b366ff' : '#f5c518'; ctx.lineWidth = 3; ctx.stroke();
-  // head
-  ctx.fillStyle = '#8d5524';
-  ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, TAU); ctx.fill();
-  // gun toward aim
-  ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.aim);
-  ctx.fillStyle = '#222'; ctx.fillRect(8, -3.5, 22, 7);
-  ctx.fillStyle = '#555'; ctx.fillRect(24, -2, 8, 4);
-  // muzzle flash
-  if (p.fireCd > WEAPONS[p.cur].rate - 0.06) {
-    ctx.fillStyle = '#ffe66d';
-    ctx.beginPath(); ctx.moveTo(32, 0); ctx.lineTo(44, -7); ctx.lineTo(48, 0); ctx.lineTo(44, 7); ctx.fill();
-  }
-  ctx.restore();
-  // name tag
-  ctx.fillStyle = '#f5c518'; ctx.font = 'bold 11px Inter'; ctx.textAlign = 'center';
-  ctx.fillText(heroName(), p.x, p.y - 24);
-  // armor ring
-  if (p.armor > 0) {
-    ctx.strokeStyle = 'rgba(74,168,255,.8)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 5, 0, TAU); ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
+export function adminSet(kind, value) {
+  if (kind === 'time') state.time = value * 60;
+  if (kind === 'weather') state.weather = value;
+  if (kind === 'money') { state.money += value; emit('money', snapshot()); }
+  if (kind === 'needs') Object.keys(state.needs).forEach((k) => { state.needs[k] = 100; });
+  emit('time', { time: state.time, day: state.day, weather: state.weather });
 }
 
-function drawEnemy(e) {
-  const spawnA = e.spawnT > 0 ? 0.4 + Math.sin(e.spawnT * 30) * 0.3 : 1;
-  ctx.globalAlpha = spawnA;
-  ctx.fillStyle = 'rgba(0,0,0,.4)';
-  ctx.beginPath(); ctx.ellipse(e.x, e.y + e.r * 0.8, e.r * 0.9, e.r * 0.35, 0, 0, TAU); ctx.fill();
-  // body
-  ctx.fillStyle = e.flash > 0 ? '#fff' : e.color;
-  ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, TAU); ctx.fill();
-  ctx.strokeStyle = e.boss ? '#ffd166' : 'rgba(0,0,0,.5)';
-  ctx.lineWidth = e.boss ? 3 : 2; ctx.stroke();
-  // facing gun/head
-  const a = angTo(e, player);
-  ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(a);
-  if (e.behavior === 'strafe' || e.behavior === 'snipe' || e.boss) {
-    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(e.r * 0.4, -3, e.r + 6, 6);
-  }
-  // eyes
-  ctx.fillStyle = e.boss ? '#ff0000' : '#111';
-  ctx.beginPath(); ctx.arc(4, -5, e.boss ? 3.5 : 2.5, 0, TAU); ctx.arc(4, 5, e.boss ? 3.5 : 2.5, 0, TAU); ctx.fill();
-  ctx.restore();
-  if (e.boss) {
-    // crown / skull mark
-    ctx.fillStyle = '#ffd166'; ctx.font = 'bold 16px serif'; ctx.textAlign = 'center';
-    ctx.fillText('☠', e.x, e.y - e.r - 8);
-    // hp mini bar
-    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(e.x - 30, e.y + e.r + 6, 60, 6);
-    ctx.fillStyle = '#ff2a2a'; ctx.fillRect(e.x - 30, e.y + e.r + 6, 60 * clamp(e.hp / e.maxHp, 0, 1), 6);
-  } else if (e.hp < e.maxHp) {
-    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(e.x - 14, e.y - e.r - 10, 28, 4);
-    ctx.fillStyle = '#7dff9e'; ctx.fillRect(e.x - 14, e.y - e.r - 10, 28 * clamp(e.hp / e.maxHp, 0, 1), 4);
-  }
-  ctx.globalAlpha = 1;
+export function getPeople() {
+  return npcs.map((n) => ({
+    id: n.id, name: n.name, job: n.job, personality: n.personality,
+    rel: getRel(n.id),
+    district: 'New Aurora',
+  }));
 }
 
-function drawMinimap() {
-  const s = mmCanvas.width / WORLD.w;
-  mm.clearRect(0, 0, mmCanvas.width, mmCanvas.height);
-  mm.fillStyle = 'rgba(10,14,22,.9)'; mm.fillRect(0, 0, mmCanvas.width, mmCanvas.height);
-  mm.fillStyle = 'rgba(255,255,255,.15)';
-  for (const o of obstacles) if (!o.wall) mm.fillRect(o.x * s, o.y * s, Math.max(2, o.w * s), Math.max(2, o.h * s));
-  for (const p of pickups) { mm.fillStyle = '#ffd166'; mm.fillRect(p.x * s - 1, p.y * s - 1, 3, 3); }
-  for (const e of enemies) { mm.fillStyle = e.boss ? '#ff2a2a' : '#ff6b6b'; mm.beginPath(); mm.arc(e.x * s, e.y * s, e.boss ? 4 : 2, 0, TAU); mm.fill(); }
-  mm.fillStyle = '#7dff9e'; mm.strokeStyle = '#fff'; mm.lineWidth = 1;
-  mm.beginPath(); mm.arc(player.x * s, player.y * s, 3.5, 0, TAU); mm.fill(); mm.stroke();
+export function getWorldRef() {
+  return { player, npcs, vehicles, landmarks: LANDMARKS, hour: hour() };
 }
 
-// ---------- pause / mute ----------
-function togglePause() {
-  if (state === 'play') {
-    state = 'pause';
-    $('pause-stats').innerHTML = `${STORY.acts[actIndex].act} — ${STORY.acts[actIndex].name} &nbsp;•&nbsp; SCORE <b>${score.toLocaleString()}</b> &nbsp;•&nbsp; KILLS <b>${kills}</b>`;
-    show('pause'); ZAudio.stopMusic();
-  } else if (state === 'pause') {
-    state = 'play'; hide('pause'); ZAudio.startMusic(1 + actIndex * 0.4 + (bossActive ? 0.6 : 0));
-  }
-}
-function toggleMute() {
-  ZAudio.init();
-  const m = ZAudio.toggleMute();
-  $('mute-btn').textContent = m ? '🔇' : '🔊';
-}
-$('mute-btn').addEventListener('click', e => { e.stopPropagation(); toggleMute(); });
-
-// ---------- menu wiring ----------
-function refreshMenu() {
-  applyPhoto();
-  $('high-score').textContent = 'BEST: ' + best().toLocaleString();
-  const sa = savedAct();
-  if (sa > 0 && sa < 3) { $('btn-continue').classList.remove('hidden'); $('continue-act').textContent = ['I', 'II', 'III'][sa]; }
-  else $('btn-continue').classList.add('hidden');
-}
-$('btn-start').addEventListener('click', () => {
-  ZAudio.init(); ZAudio.ui();
-  score = 0; kills = 0; runTime = 0; style = 0; combo = 1;
-  slowmoMeter = 100; player.grenades = 3; player.armor = 0;
-  for (const k of Object.keys(player.weapons)) { player.weapons[k].unlocked = k === 'PISTOL'; player.weapons[k].mag = k === 'PISTOL' ? 12 : 0; player.weapons[k].reserve = k === 'PISTOL' ? Infinity : 0; }
-  player.cur = 'PISTOL';
-  hide('menu');
-  playCutscene(STORY.intro(), () => startAct(0));
-});
-$('btn-continue').addEventListener('click', () => {
-  ZAudio.init(); ZAudio.ui();
-  score = 0; kills = 0; style = 0; combo = 1;
-  hide('menu');
-  startAct(savedAct());
-});
-$('btn-how').addEventListener('click', () => { ZAudio.ui(); hide('menu'); show('howto'); });
-$('btn-how-back').addEventListener('click', () => { ZAudio.ui(); hide('howto'); show('menu'); });
-$('btn-credits-link').addEventListener('click', () => { hide('menu'); $('final-score').textContent = best().toLocaleString(); $('final-kills').textContent = '—'; $('final-time').textContent = '—'; $('final-best').textContent = best().toLocaleString(); state = 'victory'; show('victory'); });
-$('btn-resume').addEventListener('click', togglePause);
-$('btn-restart-act').addEventListener('click', () => { ZAudio.ui(); hide('pause'); startAct(actIndex, true); });
-$('btn-quit').addEventListener('click', () => { ZAudio.ui(); ZAudio.stopMusic(); hide('pause'); hide('hud'); $('touch-ui').classList.add('hidden'); state = 'menu'; refreshMenu(); show('menu'); });
-$('btn-retry').addEventListener('click', () => { ZAudio.ui(); hide('gameover'); setCinema(false); player.hp = player.maxHp; startAct(actIndex, true); });
-$('btn-go-menu').addEventListener('click', () => { ZAudio.ui(); hide('gameover'); setCinema(false); state = 'menu'; refreshMenu(); show('menu'); });
-$('btn-play-again').addEventListener('click', () => { ZAudio.ui(); hide('victory'); setCinema(false); score = 0; kills = 0; runTime = 0; style = 0; startAct(0); });
-$('btn-v-menu').addEventListener('click', () => { ZAudio.ui(); hide('victory'); setCinema(false); state = 'menu'; refreshMenu(); show('menu'); });
-$('btn-photo').addEventListener('click', () => $('photo-input').click());
-$('photo-input').addEventListener('change', e => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const r = new FileReader();
-  r.onload = () => {
-    // downscale to keep localStorage small
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement('canvas');
-      const S = 256; c.width = S; c.height = S;
-      const g = c.getContext('2d');
-      const sc = Math.max(S / img.width, S / img.height);
-      const w = img.width * sc, h = img.height * sc;
-      g.drawImage(img, (S - w) / 2, (S - h) / 2, w, h);
-      try { localStorage.setItem('zach_photo', c.toDataURL('image/jpeg', 0.85)); } catch (err) { alert('Photo too large to save, but it will work for this session.'); }
-      applyPhoto(); ZAudio.pickup();
-      alert('You are now the star! ⭐');
-    };
-    img.src = r.result;
-  };
-  r.readAsDataURL(f);
-  e.target.value = '';
-});
-
-// ---------- boot ----------
-refreshMenu();
-show('menu');
-requestAnimationFrame(loop);
-})();
+export { hour as gameHour, fmtHour };
