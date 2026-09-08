@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ZACH: SHADOW PROTOCOL — Starring Zach</title>
+<meta name="description" content="A cinematic action movie-game starring Zach. One man. One city. No mercy.">
+<link rel="stylesheet" href="css/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="app">
+  <canvas id="game"></canvas>
+
+  <!-- Cinematic vignette + fx overlays -->
+  <div id="vignette"></div>
+  <div id="damage-vignette"></div>
+  <div id="slowmo-vignette"></div>
+  <div id="flash"></div>
+  <div id="letterbox-top" class="letterbox"></div>
+  <div id="letterbox-bottom" class="letterbox"></div>
+
+  <!-- ============ HUD ============ -->
+  <div id="hud" class="hidden">
+    <div id="hud-top-left">
+      <div id="hero-badge"><img id="hud-face" src="assets/hero.png" alt="Zach"></div>
+      <div id="bars">
+        <div class="bar-row"><div class="bar-label">ZACH</div>
+          <div class="bar hp-bar"><div id="hp-fill"></div><span id="hp-text">100</span></div>
+        </div>
+        <div class="bar-row"><div class="bar-label">ARMOR</div>
+          <div class="bar armor-bar"><div id="armor-fill"></div></div>
+        </div>
+        <div class="bar-row"><div class="bar-label">Z-TIME</div>
+          <div class="bar slowmo-bar"><div id="slowmo-fill"></div></div>
+        </div>
+      </div>
+    </div>
+    <div id="hud-top-center">
+      <div id="objective-banner"><span id="act-label">ACT I</span><span id="objective-text">SURVIVE</span></div>
+      <div id="boss-bar-wrap" class="hidden"><div id="boss-name">BRUTUS</div><div class="bar boss-bar"><div id="boss-fill"></div></div></div>
+    </div>
+    <div id="hud-top-right">
+      <div id="score-box"><div id="score">0</div><div id="combo" class="hidden">x2 COMBO</div></div>
+      <div id="style-rank" title="Style rank">C</div>
+      <div id="mute-btn" title="Mute (M)">🔊</div>
+    </div>
+    <div id="hud-bottom-left">
+      <div id="weapon-box"><div id="weapon-name">PISTOL</div><div id="ammo">12 / ∞</div></div>
+      <div id="grenade-box">💣 <span id="grenades">3</span> <em>[E]</em></div>
+      <div id="dash-hint">SHIFT: DASH &nbsp;•&nbsp; SPACE: Z-TIME</div>
+    </div>
+    <div id="hud-bottom-right"><canvas id="minimap" width="150" height="150"></canvas></div>
+    <div id="killfeed"></div>
+    <div id="subtitle"></div>
+    <div id="center-message" class="hidden"></div>
+  </div>
+
+  <!-- Touch controls -->
+  <div id="touch-ui" class="hidden">
+    <div id="stick-left" class="stick"><div class="nub"></div></div>
+    <div id="stick-right" class="stick"><div class="nub"></div></div>
+    <div id="touch-btns">
+      <button id="btn-dash">DASH</button>
+      <button id="btn-grenade">💣</button>
+      <button id="btn-slowmo">Z-TIME</button>
+    </div>
+  </div>
+
+  <!-- ============ MAIN MENU ============ -->
+  <div id="menu" class="screen">
+    <div class="menu-bg"></div>
+    <div class="menu-content">
+      <div class="presents">PRAYERDOME PICTURES PRESENTS</div>
+      <h1 class="title"><span class="zach">ZACH</span><span class="sub">SHADOW PROTOCOL</span></h1>
+      <div class="starring">★ STARRING <span id="star-name">ZACH</span> ★</div>
+      <div class="menu-hero"><img id="menu-face" src="assets/hero.png" alt="Zach - Star"></div>
+      <div class="tagline">ONE MAN. ONE CITY. NO MERCY.</div>
+      <div class="menu-buttons">
+        <button id="btn-start" class="btn big">▶ START MISSION</button>
+        <button id="btn-continue" class="btn hidden">CONTINUE — ACT <span id="continue-act">II</span></button>
+        <button id="btn-how" class="btn">HOW TO PLAY</button>
+        <button id="btn-photo" class="btn">📸 USE YOUR PHOTO AS THE STAR</button>
+        <input type="file" id="photo-input" accept="image/*" class="hidden">
+      </div>
+      <div class="menu-foot">
+        <span id="high-score">BEST: 0</span> • <span>WASD + MOUSE • Top-down cinematic shooter</span> • <span id="btn-credits-link">credits</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ HOW TO PLAY ============ -->
+  <div id="howto" class="screen hidden">
+    <div class="panel">
+      <h2>HOW TO PLAY</h2>
+      <div class="how-grid">
+        <div><b>WASD / ARROWS</b><span>Move</span></div>
+        <div><b>MOUSE</b><span>Aim — CLICK to shoot</span></div>
+        <div><b>SHIFT</b><span>Dash (invincible)</span></div>
+        <div><b>SPACE</b><span>Z-TIME slow motion</span></div>
+        <div><b>E / Q</b><span>Throw grenade</span></div>
+        <div><b>R</b><span>Reload</span></div>
+        <div><b>1–4</b><span>Switch weapon</span></div>
+        <div><b>P / ESC</b><span>Pause</span></div>
+      </div>
+      <p class="tip">📱 Mobile: left stick moves, right stick aims &amp; fires. Chain kills for COMBO × score. Grabs: <b>✚ medkit</b>, <b>🛡 armor</b>, <b>🔫 weapons</b>. Dash through bullets — you're the hero.</p>
+      <button id="btn-how-back" class="btn">← BACK</button>
+    </div>
+  </div>
+
+  <!-- ============ CUTSCENE ============ -->
+  <div id="cutscene" class="screen hidden">
+    <div id="cs-portrait-wrap"><img id="cs-portrait" src="assets/hero.png" alt=""></div>
+    <div id="cs-box">
+      <div id="cs-name">ZACH</div>
+      <div id="cs-text"></div>
+      <div id="cs-hint">CLICK / SPACE ▸ continue &nbsp;•&nbsp; <span id="cs-skip">SKIP ⏭</span></div>
+    </div>
+    <div id="cs-title-card" class="hidden"><div id="cs-act">ACT I</div><div id="cs-act-name">STREET SIEGE</div></div>
+  </div>
+
+  <!-- ============ PAUSE ============ -->
+  <div id="pause" class="screen hidden">
+    <div class="panel">
+      <h2>❚❚ PAUSED</h2>
+      <p id="pause-stats"></p>
+      <button id="btn-resume" class="btn big">RESUME</button>
+      <button id="btn-restart-act" class="btn">RESTART ACT</button>
+      <button id="btn-quit" class="btn danger">QUIT TO MENU</button>
+    </div>
+  </div>
+
+  <!-- ============ GAME OVER ============ -->
+  <div id="gameover" class="screen hidden">
+    <div class="panel dark">
+      <div class="presents">ZACH HAS FALLEN…</div>
+      <h2 class="title-sm">TO BE CONTINUED?</h2>
+      <p id="go-stats"></p>
+      <button id="btn-retry" class="btn big">↻ RETRY ACT</button>
+      <button id="btn-go-menu" class="btn">MENU</button>
+    </div>
+  </div>
+
+  <!-- ============ VICTORY / CREDITS ============ -->
+  <div id="victory" class="screen hidden">
+    <div id="credits-roll">
+      <div class="presents">PRAYERDOME PICTURES</div>
+      <h2 class="title-sm gold">ZACH: SHADOW PROTOCOL</h2>
+      <div class="starring">★ STARRING <span class="star-name-v">ZACH</span> ★</div>
+      <div class="credit"><span>DIRECTED BY</span><b>YOU</b></div>
+      <div class="credit"><span>HERO OF LUSAKA</span><b class="star-name-v">ZACH</b></div>
+      <div class="credit"><span>FINAL SCORE</span><b id="final-score">0</b></div>
+      <div class="credit"><span>KILLS</span><b id="final-kills">0</b></div>
+      <div class="credit"><span>TIME</span><b id="final-time">0:00</b></div>
+      <div class="credit"><span>BEST</span><b id="final-best">0</b></div>
+      <p class="tagline">LUSAKA IS SAFE… FOR NOW.</p>
+      <button id="btn-play-again" class="btn big">▶ PLAY AGAIN</button>
+      <button id="btn-v-menu" class="btn">MENU</button>
+    </div>
+  </div>
+
+  <div id="act-card" class="hidden"><div id="act-card-act">ACT I</div><div id="act-card-name">STREET SIEGE</div></div>
+</div>
+<script src="js/audio.js"></script>
+<script src="js/story.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

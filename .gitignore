@@ -1,18 +1,2 @@
-.env
-config.toml
+.DS_Store
 *.log
-*.sqlite
-*.db
-reports/
-data/
-
-__pycache__/
-*.py[cod]
-
-# Next.js
-.next/
-out/
-next-env.d.ts
-node_modules/
-npm-debug.log*
-
