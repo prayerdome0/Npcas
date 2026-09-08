@@ -3,167 +3,229 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ZACH: SHADOW PROTOCOL — Starring Zach</title>
-<meta name="description" content="A cinematic action movie-game starring Zach. One man. One city. No mercy.">
-<link rel="stylesheet" href="css/style.css">
+<title>ZACH — Open World Life Simulator</title>
+<meta name="description" content="ZACH is an open-world life simulator. Build a life in New Aurora — work, drive, own, belong.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Syne:wght@700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
 </head>
 <body>
-<div id="app">
-  <canvas id="game"></canvas>
+<canvas id="game"></canvas>
 
-  <!-- Cinematic vignette + fx overlays -->
-  <div id="vignette"></div>
-  <div id="damage-vignette"></div>
-  <div id="slowmo-vignette"></div>
-  <div id="flash"></div>
-  <div id="letterbox-top" class="letterbox"></div>
-  <div id="letterbox-bottom" class="letterbox"></div>
-
-  <!-- ============ HUD ============ -->
-  <div id="hud" class="hidden">
-    <div id="hud-top-left">
-      <div id="hero-badge"><img id="hud-face" src="assets/hero.png" alt="Zach"></div>
-      <div id="bars">
-        <div class="bar-row"><div class="bar-label">ZACH</div>
-          <div class="bar hp-bar"><div id="hp-fill"></div><span id="hp-text">100</span></div>
-        </div>
-        <div class="bar-row"><div class="bar-label">ARMOR</div>
-          <div class="bar armor-bar"><div id="armor-fill"></div></div>
-        </div>
-        <div class="bar-row"><div class="bar-label">Z-TIME</div>
-          <div class="bar slowmo-bar"><div id="slowmo-fill"></div></div>
-        </div>
-      </div>
-    </div>
-    <div id="hud-top-center">
-      <div id="objective-banner"><span id="act-label">ACT I</span><span id="objective-text">SURVIVE</span></div>
-      <div id="boss-bar-wrap" class="hidden"><div id="boss-name">BRUTUS</div><div class="bar boss-bar"><div id="boss-fill"></div></div></div>
-    </div>
-    <div id="hud-top-right">
-      <div id="score-box"><div id="score">0</div><div id="combo" class="hidden">x2 COMBO</div></div>
-      <div id="style-rank" title="Style rank">C</div>
-      <div id="mute-btn" title="Mute (M)">🔊</div>
-    </div>
-    <div id="hud-bottom-left">
-      <div id="weapon-box"><div id="weapon-name">PISTOL</div><div id="ammo">12 / ∞</div></div>
-      <div id="grenade-box">💣 <span id="grenades">3</span> <em>[E]</em></div>
-      <div id="dash-hint">SHIFT: DASH &nbsp;•&nbsp; SPACE: Z-TIME</div>
-    </div>
-    <div id="hud-bottom-right"><canvas id="minimap" width="150" height="150"></canvas></div>
-    <div id="killfeed"></div>
-    <div id="subtitle"></div>
-    <div id="center-message" class="hidden"></div>
+<div id="loader" class="screen">
+  <div class="load-art"></div>
+  <div class="load-inner">
+    <div class="presents">NEW AURORA CITY WORKS</div>
+    <h1 class="title"><span>ZACH</span><small>OPEN WORLD</small></h1>
+    <div class="load-bar"><i></i></div>
+    <p id="load-msg">Waking the city…</p>
   </div>
-
-  <!-- Touch controls -->
-  <div id="touch-ui" class="hidden">
-    <div id="stick-left" class="stick"><div class="nub"></div></div>
-    <div id="stick-right" class="stick"><div class="nub"></div></div>
-    <div id="touch-btns">
-      <button id="btn-dash">DASH</button>
-      <button id="btn-grenade">💣</button>
-      <button id="btn-slowmo">Z-TIME</button>
-    </div>
-  </div>
-
-  <!-- ============ MAIN MENU ============ -->
-  <div id="menu" class="screen">
-    <div class="menu-bg"></div>
-    <div class="menu-content">
-      <div class="presents">PRAYERDOME PICTURES PRESENTS</div>
-      <h1 class="title"><span class="zach">ZACH</span><span class="sub">SHADOW PROTOCOL</span></h1>
-      <div class="starring">★ STARRING <span id="star-name">ZACH</span> ★</div>
-      <div class="menu-hero"><img id="menu-face" src="assets/hero.png" alt="Zach - Star"></div>
-      <div class="tagline">ONE MAN. ONE CITY. NO MERCY.</div>
-      <div class="menu-buttons">
-        <button id="btn-start" class="btn big">▶ START MISSION</button>
-        <button id="btn-continue" class="btn hidden">CONTINUE — ACT <span id="continue-act">II</span></button>
-        <button id="btn-how" class="btn">HOW TO PLAY</button>
-        <button id="btn-photo" class="btn">📸 USE YOUR PHOTO AS THE STAR</button>
-        <input type="file" id="photo-input" accept="image/*" class="hidden">
-      </div>
-      <div class="menu-foot">
-        <span id="high-score">BEST: 0</span> • <span>WASD + MOUSE • Top-down cinematic shooter</span> • <span id="btn-credits-link">credits</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ============ HOW TO PLAY ============ -->
-  <div id="howto" class="screen hidden">
-    <div class="panel">
-      <h2>HOW TO PLAY</h2>
-      <div class="how-grid">
-        <div><b>WASD / ARROWS</b><span>Move</span></div>
-        <div><b>MOUSE</b><span>Aim — CLICK to shoot</span></div>
-        <div><b>SHIFT</b><span>Dash (invincible)</span></div>
-        <div><b>SPACE</b><span>Z-TIME slow motion</span></div>
-        <div><b>E / Q</b><span>Throw grenade</span></div>
-        <div><b>R</b><span>Reload</span></div>
-        <div><b>1–4</b><span>Switch weapon</span></div>
-        <div><b>P / ESC</b><span>Pause</span></div>
-      </div>
-      <p class="tip">📱 Mobile: left stick moves, right stick aims &amp; fires. Chain kills for COMBO × score. Grabs: <b>✚ medkit</b>, <b>🛡 armor</b>, <b>🔫 weapons</b>. Dash through bullets — you're the hero.</p>
-      <button id="btn-how-back" class="btn">← BACK</button>
-    </div>
-  </div>
-
-  <!-- ============ CUTSCENE ============ -->
-  <div id="cutscene" class="screen hidden">
-    <div id="cs-portrait-wrap"><img id="cs-portrait" src="assets/hero.png" alt=""></div>
-    <div id="cs-box">
-      <div id="cs-name">ZACH</div>
-      <div id="cs-text"></div>
-      <div id="cs-hint">CLICK / SPACE ▸ continue &nbsp;•&nbsp; <span id="cs-skip">SKIP ⏭</span></div>
-    </div>
-    <div id="cs-title-card" class="hidden"><div id="cs-act">ACT I</div><div id="cs-act-name">STREET SIEGE</div></div>
-  </div>
-
-  <!-- ============ PAUSE ============ -->
-  <div id="pause" class="screen hidden">
-    <div class="panel">
-      <h2>❚❚ PAUSED</h2>
-      <p id="pause-stats"></p>
-      <button id="btn-resume" class="btn big">RESUME</button>
-      <button id="btn-restart-act" class="btn">RESTART ACT</button>
-      <button id="btn-quit" class="btn danger">QUIT TO MENU</button>
-    </div>
-  </div>
-
-  <!-- ============ GAME OVER ============ -->
-  <div id="gameover" class="screen hidden">
-    <div class="panel dark">
-      <div class="presents">ZACH HAS FALLEN…</div>
-      <h2 class="title-sm">TO BE CONTINUED?</h2>
-      <p id="go-stats"></p>
-      <button id="btn-retry" class="btn big">↻ RETRY ACT</button>
-      <button id="btn-go-menu" class="btn">MENU</button>
-    </div>
-  </div>
-
-  <!-- ============ VICTORY / CREDITS ============ -->
-  <div id="victory" class="screen hidden">
-    <div id="credits-roll">
-      <div class="presents">PRAYERDOME PICTURES</div>
-      <h2 class="title-sm gold">ZACH: SHADOW PROTOCOL</h2>
-      <div class="starring">★ STARRING <span class="star-name-v">ZACH</span> ★</div>
-      <div class="credit"><span>DIRECTED BY</span><b>YOU</b></div>
-      <div class="credit"><span>HERO OF LUSAKA</span><b class="star-name-v">ZACH</b></div>
-      <div class="credit"><span>FINAL SCORE</span><b id="final-score">0</b></div>
-      <div class="credit"><span>KILLS</span><b id="final-kills">0</b></div>
-      <div class="credit"><span>TIME</span><b id="final-time">0:00</b></div>
-      <div class="credit"><span>BEST</span><b id="final-best">0</b></div>
-      <p class="tagline">LUSAKA IS SAFE… FOR NOW.</p>
-      <button id="btn-play-again" class="btn big">▶ PLAY AGAIN</button>
-      <button id="btn-v-menu" class="btn">MENU</button>
-    </div>
-  </div>
-
-  <div id="act-card" class="hidden"><div id="act-card-act">ACT I</div><div id="act-card-name">STREET SIEGE</div></div>
 </div>
-<script src="js/audio.js"></script>
-<script src="js/story.js"></script>
-<script src="js/game.js"></script>
+
+<div id="menu" class="screen">
+  <div class="menu-art"></div>
+  <div class="menu-vignette"></div>
+  <div class="menu-col">
+    <div class="presents">A LIFE SIMULATOR</div>
+    <h1 class="title"><span>ZACH</span><small>OPEN WORLD</small></h1>
+    <p class="tagline">The city never sleeps. Neither does opportunity.</p>
+    <p class="starring">★ Starring <span id="star-name">Zach</span> — click to rename</p>
+    <div class="menu-buttons">
+      <button id="btn-new" class="btn gold big">New Life</button>
+      <button id="btn-continue" class="btn big hidden">Continue<span id="continue-meta" class="meta"></span></button>
+      <button id="btn-how" class="btn">How to Live</button>
+    </div>
+    <div class="menu-foot">
+      WASD · E interact · F drive · Tab phone · Mouse look
+      <span id="btn-admin-link" class="link">Studio tools</span>
+    </div>
+  </div>
+</div>
+
+<div id="howto" class="screen hidden dim">
+  <div class="panel wide">
+    <h2>How to Live</h2>
+    <div class="how-grid">
+      <div><b>WASD / Arrows</b><span>Walk the city</span></div>
+      <div><b>Shift</b><span>Sprint</span></div>
+      <div><b>Space</b><span>Jump · handbrake</span></div>
+      <div><b>Mouse</b><span>Look (click canvas or hold RMB)</span></div>
+      <div><b>E</b><span>Talk, enter, harvest, deliver</span></div>
+      <div><b>F</b><span>Enter / exit vehicle</span></div>
+      <div><b>Tab</b><span>Phone — map, bank, jobs, property</span></div>
+      <div><b>Esc</b><span>Pause · close panels</span></div>
+    </div>
+    <p class="tip">Needs decay in real time. Eat, sleep, shower, talk. Jobs pay during posted hours. Businesses deposit at midnight. Gold diamonds mark story missions. New Aurora is downtown, Oakwood, Eastbrook, Greenfield farms, Pinewood, Ironworks, the airfield and North Harbor.</p>
+    <button id="btn-how-back" class="btn">← Back</button>
+  </div>
+</div>
+
+<div id="creator" class="screen hidden dim">
+  <div class="creator-wrap">
+    <div class="doll-stage">
+      <div id="doll" class="doll style-0">
+        <div class="hair"></div>
+        <div class="head"><i class="eye l"></i><i class="eye r"></i></div>
+        <div class="torso"></div>
+        <div class="arm l"></div><div class="arm r"></div>
+        <div class="leg l"></div><div class="leg r"></div>
+      </div>
+      <p class="muted">This is you, arriving with $750 and a studio key.</p>
+    </div>
+    <div class="panel creator-panel">
+      <h2>Create a Life</h2>
+      <label>Name <input id="c-name" maxlength="18" value="Zach"></label>
+      <div class="gender">
+        <label><input type="radio" name="gender" value="m" checked> Masculine</label>
+        <label><input type="radio" name="gender" value="f"> Feminine</label>
+        <label><input type="radio" name="gender" value="n"> Androgynous</label>
+      </div>
+      <p class="lbl">Skin</p><div id="c-skin" class="swatches"></div>
+      <p class="lbl">Hair color</p><div id="c-hair" class="swatches"></div>
+      <p class="lbl">Hair style</p><div id="c-style" class="chips"></div>
+      <p class="lbl">Eyes</p><div id="c-eyes" class="swatches"></div>
+      <p class="lbl">Shirt</p><div id="c-shirt" class="swatches"></div>
+      <p class="lbl">Pants</p><div id="c-pants" class="swatches"></div>
+      <label>Height <input id="c-height" type="range" min="0" max="100" value="50"></label>
+      <label>Build <input id="c-body" type="range" min="0" max="100" value="40"></label>
+      <p class="lbl">Trait</p><div id="c-trait" class="chips"></div>
+      <div class="row-btns">
+        <button id="btn-create-back" class="btn">Back</button>
+        <button id="btn-create" class="btn gold big">Arrive in New Aurora</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="hud-left">
+    <div class="id-chip">
+      <div>
+        <div id="hud-name">Zach</div>
+        <div id="level-pip">LV 1</div>
+      </div>
+    </div>
+    <div class="needs">
+      <div class="need"><span>Hunger</span><div class="nbar"><i id="hunger-fill"></i></div></div>
+      <div class="need"><span>Energy</span><div class="nbar"><i id="energy-fill"></i></div></div>
+      <div class="need"><span>Fun</span><div class="nbar"><i id="fun-fill"></i></div></div>
+      <div class="need"><span>Social</span><div class="nbar"><i id="social-fill"></i></div></div>
+      <div class="need"><span>Hygiene</span><div class="nbar"><i id="hygiene-fill"></i></div></div>
+    </div>
+  </div>
+  <div id="hud-center">
+    <div id="clock-wrap"><span id="weather-ico">☀</span> <span id="clock">8:00 AM</span> · <span id="day-label">DAY 1</span></div>
+    <div id="mission-card">
+      <div id="mission-title">A New Dawn</div>
+      <div id="mission-brief">Step outside. New Aurora is waiting.</div>
+      <div id="mission-side"></div>
+    </div>
+  </div>
+  <div id="hud-right">
+    <div id="cash">$750</div>
+    <div class="hud-btns">
+      <button id="btn-phone" class="icon-btn" title="Phone (Tab)">▣</button>
+      <button id="btn-pause" class="icon-btn" title="Pause">❚❚</button>
+      <button id="mute-btn" class="icon-btn" title="Mute">🔊</button>
+    </div>
+    <canvas id="minimap" width="168" height="168"></canvas>
+  </div>
+  <div id="prompt"></div>
+  <div id="toasts"></div>
+</div>
+
+<div id="touch-ui" class="hidden">
+  <button id="btn-touch-e">E</button>
+  <button id="btn-touch-f">F</button>
+</div>
+
+<div id="phone" class="hidden">
+  <div class="phone-frame">
+    <div class="phone-bar"><span id="phone-clock">8:00 AM</span><span>ZACH</span></div>
+    <div class="phone-wallpaper"></div>
+    <div id="phone-title" class="phone-title">New Aurora</div>
+    <div id="phone-home-grid" class="app-grid">
+      <button class="app-ico" data-app="map"><i>🗺</i>Map</button>
+      <button class="app-ico" data-app="bank"><i>🏦</i>Bank</button>
+      <button class="app-ico" data-app="jobs"><i>💼</i>Career</button>
+      <button class="app-ico" data-app="estate"><i>🏠</i>Estate</button>
+      <button class="app-ico" data-app="biz"><i>📈</i>Business</button>
+      <button class="app-ico" data-app="people"><i>👥</i>People</button>
+      <button class="app-ico" data-app="missions"><i>★</i>Missions</button>
+      <button class="app-ico" data-app="bag"><i>🎒</i>Bag</button>
+      <button class="app-ico" data-app="car"><i>🚗</i>Garage</button>
+      <button class="app-ico" data-app="settings"><i>⚙</i>Settings</button>
+    </div>
+    <div id="phone-view" class="phone-view hidden"></div>
+    <div class="phone-dock">
+      <button id="phone-home">●</button>
+      <button id="phone-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="dialogue" class="hidden">
+  <div class="dlg">
+    <div class="dlg-h"><b id="dlg-name">Maya</b><span id="dlg-job"></span><button id="dlg-close" class="icon-btn">✕</button></div>
+    <p id="dlg-text"></p>
+    <div id="dlg-opts" class="row-btns"></div>
+  </div>
+</div>
+
+<div id="shop" class="hidden dim">
+  <div class="panel">
+    <div class="dlg-h"><h2 id="shop-title">Shop</h2><button id="shop-close" class="icon-btn">✕</button></div>
+    <div id="shop-body" class="list scroll"></div>
+  </div>
+</div>
+
+<div id="map-full" class="hidden dim">
+  <div class="panel wide">
+    <div class="dlg-h"><h2>New Aurora</h2><button id="map-close" class="icon-btn">✕</button></div>
+    <canvas id="map-big"></canvas>
+  </div>
+</div>
+
+<div id="pause" class="screen hidden dim">
+  <div class="panel">
+    <h2>Paused</h2>
+    <p id="pause-stats"></p>
+    <button id="btn-resume" class="btn gold big">Resume</button>
+    <button id="btn-save" class="btn">Save Life</button>
+    <button id="btn-quit" class="btn danger">Quit to Menu</button>
+  </div>
+</div>
+
+<div id="admin" class="screen hidden dim">
+  <div class="panel wide">
+    <div class="dlg-h"><h2>Studio Tools</h2><button id="admin-close" class="icon-btn">✕</button></div>
+    <p class="muted">Economy, time, weather, citizen ledger. Single-player sandbox controls.</p>
+    <div class="row-btns wrap">
+      <label>Hour <input id="ad-time" type="range" min="0" max="23" value="8"> <span id="ad-time-v">8:00</span></label>
+      <button id="ad-apply-time" class="btn">Set time</button>
+      <select id="ad-weather">
+        <option value="sunny">Sunny</option>
+        <option value="rain">Rain</option>
+        <option value="storm">Storm</option>
+        <option value="fog">Fog</option>
+        <option value="wind">Wind</option>
+      </select>
+      <button id="ad-money" class="btn">+$5,000</button>
+      <button id="ad-needs" class="btn">Fill needs</button>
+      <button id="ad-ban" class="btn danger">Log report</button>
+    </div>
+    <div id="admin-stats"></div>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
 </body>
 </html>
